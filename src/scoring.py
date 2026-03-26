@@ -8,7 +8,6 @@ IS/OOS overfitting penalty used by the Optuna objective.
 from __future__ import annotations
 
 import logging
-from typing import Optional
 
 import numpy as np
 import pandas as pd
@@ -78,6 +77,10 @@ def add_pivot_labels(df: pd.DataFrame) -> pd.DataFrame:
 
     Returns:
         df with added pivot label columns.
+
+    Precondition:
+        ``df`` must be an owned DataFrame, not a view or slice.
+        Callers should pass ``df.copy()`` if working with a slice.
     """
     for N in PIVOT_SCALES:
         col = f"pivot_N{N}"
@@ -113,6 +116,8 @@ def precision_at_n(
     Returns:
         Precision = TP / (TP + FP).  Returns 0.0 if no signals.
     """
+    if side not in ("high", "low"):
+        raise ValueError(f"side must be 'high' or 'low', got {side!r}")
     pivot_sign = 1 if side == "high" else -1
     signal_bars = signals[signals].index
 
@@ -157,9 +162,13 @@ def compute_side_score(
         Raw score in [0, ~7] * frequency_factor ∈ [0, 1].
         In practice bounded by the sum of log-weights ≤ 1.0 per scale.
     """
+    if side not in ("high", "low"):
+        raise ValueError(f"side must be 'high' or 'low', got {side!r}")
     n_bars = len(df)
-    n_signals = int(signals.sum())
-    signal_rate = n_signals / n_bars if n_bars > 0 else 0.0
+    n_signals = int(signals.fillna(False).astype(bool).sum())
+    if n_bars == 0:
+        return 0.0
+    signal_rate = n_signals / n_bars
     frequency_factor = min(1.0, signal_rate / MIN_RATE)
 
     # Lazy pivot labeling
@@ -187,6 +196,33 @@ def compute_side_score(
 # ---------------------------------------------------------------------------
 
 
+def _fold_score(
+    df_is: pd.DataFrame,
+    df_oos: pd.DataFrame,
+    sig_is: pd.Series,
+    sig_oos: pd.Series,
+    side: str,
+) -> float:
+    """Private helper: per-fold OOS score with IS-OOS overfitting penalty.
+
+    Returns OOS score penalized for IS-OOS gap:
+        oos_score - GAMMA * max(0, is_score - oos_score)
+
+    Args:
+        df_is: In-sample OHLCV DataFrame.
+        df_oos: Out-of-sample OHLCV DataFrame.
+        sig_is: Boolean signals on in-sample period.
+        sig_oos: Boolean signals on out-of-sample period.
+        side: "high" or "low".
+
+    Returns:
+        Penalized OOS score (float).
+    """
+    is_score = compute_side_score(df_is, sig_is, side)
+    oos_score = compute_side_score(df_oos, sig_oos, side)
+    return oos_score - GAMMA * max(0.0, is_score - oos_score)
+
+
 def fold_score_high(
     df_is: pd.DataFrame,
     df_oos: pd.DataFrame,
@@ -207,9 +243,7 @@ def fold_score_high(
     Returns:
         Penalized OOS score (float).
     """
-    is_score = compute_side_score(df_is, sig_is, "high")
-    oos_score = compute_side_score(df_oos, sig_oos, "high")
-    return oos_score - GAMMA * max(0.0, is_score - oos_score)
+    return _fold_score(df_is, df_oos, sig_is, sig_oos, "high")
 
 
 def fold_score_low(
@@ -232,9 +266,7 @@ def fold_score_low(
     Returns:
         Penalized OOS score (float).
     """
-    is_score = compute_side_score(df_is, sig_is, "low")
-    oos_score = compute_side_score(df_oos, sig_oos, "low")
-    return oos_score - GAMMA * max(0.0, is_score - oos_score)
+    return _fold_score(df_is, df_oos, sig_is, sig_oos, "low")
 
 
 # ---------------------------------------------------------------------------
