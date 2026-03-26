@@ -157,7 +157,18 @@ def pir_of(val: pd.Series, lb: int) -> pd.Series:
 
 
 def pivot_high(series: pd.Series, n: int) -> pd.Series:
-    """Non-causal pivot high — True where bar is the max in [i-n, i+n]."""
+    """Non-causal pivot high detector for ground truth labeling ONLY.
+
+    Returns True at bar ``i`` when ``series[i]`` is the maximum value in the
+    symmetric window ``[i-n, i+n]`` (width ``2n+1``).
+
+    Non-causal: the result at bar ``i`` depends on ``n`` future bars, so the
+    last ``n`` bars of the returned series are always False/NaN.  Bar ``i``
+    "fires" only after bar ``i+n`` has been observed.
+
+    **ONLY for ground truth labeling** (e.g. scoring.py).
+    NEVER use for real-time signal evaluation.
+    """
     window = 2 * n + 1
     rolled = series.rolling(window, center=True).apply(
         lambda w: 1.0 if w[n] == w.max() else 0.0, raw=True
@@ -166,7 +177,18 @@ def pivot_high(series: pd.Series, n: int) -> pd.Series:
 
 
 def pivot_low(series: pd.Series, n: int) -> pd.Series:
-    """Non-causal pivot low — True where bar is the min in [i-n, i+n]."""
+    """Non-causal pivot low detector for ground truth labeling ONLY.
+
+    Returns True at bar ``i`` when ``series[i]`` is the minimum value in the
+    symmetric window ``[i-n, i+n]`` (width ``2n+1``).
+
+    Non-causal: the result at bar ``i`` depends on ``n`` future bars, so the
+    last ``n`` bars of the returned series are always False/NaN.  Bar ``i``
+    "fires" only after bar ``i+n`` has been observed.
+
+    **ONLY for ground truth labeling** (e.g. scoring.py).
+    NEVER use for real-time signal evaluation.
+    """
     window = 2 * n + 1
     rolled = series.rolling(window, center=True).apply(
         lambda w: 1.0 if w[n] == w.min() else 0.0, raw=True
@@ -302,15 +324,17 @@ def calc_gjr_asym(df: pd.DataFrame) -> tuple[pd.Series, pd.Series]:
     gjr_var = np.full(n, np.nan)
     sym_var = np.full(n, np.nan)
 
-    # Initialize at first valid lr_var
-    init_val = lr_var[0] if not np.isnan(lr_var[0]) else 1e-12
+    # Seed with r2[0] (the squared return at bar 0); lr_var[0] is NaN because
+    # it requires 252 bars.  Fall back to 1e-12 only if r2[0] is also NaN.
+    init_val = r2[0] if not np.isnan(r2[0]) else 1e-12
+    init_val = max(init_val, 1e-12)
     gjr_var[0] = init_val
     sym_var[0] = init_val
 
     for t in range(1, n):
-        om = omega[t]
-        if np.isnan(om):
-            om = 1e-12
+        # omega[t] is NaN for bars 0–251 (before lr_var becomes valid).
+        # Fall back to max(r2[t], 1e-12) to mirror the Pine Script behaviour.
+        om = omega[t] if not np.isnan(omega[t]) else max(r2[t], 1e-12)
         om = max(om, 1e-12)
         leverage = 1.0 if log_ret[t - 1] < 0 else 0.0
         gjr_var[t] = max(
