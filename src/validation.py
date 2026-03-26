@@ -118,10 +118,10 @@ def walk_forward_folds(
         df_oos = df[oos_mask].copy()
 
         # Apply embargo: drop last EMBARGO_BARS rows from IS
-        if len(df_is_raw) > EMBARGO_BARS:
-            df_is = df_is_raw.iloc[:-EMBARGO_BARS].copy()
-        else:
-            df_is = df_is_raw
+        if len(df_is_raw) <= EMBARGO_BARS:
+            logger.warning("Fold IS slice too small for embargo (%d bars), skipping", len(df_is_raw))
+            continue
+        df_is = df_is_raw.iloc[:-EMBARGO_BARS].copy()
 
         if len(df_is) > 0 and len(df_oos) > 0:
             folds.append((df_is, df_oos))
@@ -182,7 +182,7 @@ def load_cross_asset(
     if not resample_to_1d:
         return df
 
-    df_daily = df.resample("1D").agg(
+    df_daily = df.resample("1d").agg(
         {
             "open": "first",
             "high": "max",
@@ -236,14 +236,21 @@ def build_optuna_objective(
     folds = walk_forward_folds(df_full)
     if not folds:
         raise ValueError("No walk-forward folds could be constructed from df_full.")
+    if len(folds) != len(FOLD_DEFINITIONS):
+        raise ValueError(
+            f"Expected {len(FOLD_DEFINITIONS)} folds, got {len(folds)}. "
+            "Ensure df_full covers 1983-2008."
+        )
 
     def objective(trial: optuna.Trial) -> float:
         params = params_from_trial(trial, side)
 
         fold_scores: list[float] = []
         for fold_idx, (df_is, df_oos) in enumerate(folds):
-            det_is = SpeculatorDetector(df_is, params).run()
-            det_oos = SpeculatorDetector(df_oos, params).run()
+            df_is_r = df_is.reset_index(drop=True)
+            df_oos_r = df_oos.reset_index(drop=True)
+            det_is = SpeculatorDetector(df_is_r, params).run()
+            det_oos = SpeculatorDetector(df_oos_r, params).run()
 
             sig_high_is = det_is["signal_high"]
             sig_low_is = det_is["signal_low"]
@@ -251,9 +258,9 @@ def build_optuna_objective(
             sig_low_oos = det_oos["signal_low"]
 
             if side == "high":
-                score = fold_score_high(df_is, df_oos, sig_high_is, sig_high_oos)
+                score = fold_score_high(df_is_r, df_oos_r, sig_high_is, sig_high_oos)
             else:
-                score = fold_score_low(df_is, df_oos, sig_low_is, sig_low_oos)
+                score = fold_score_low(df_is_r, df_oos_r, sig_low_is, sig_low_oos)
 
             fold_scores.append(score)
 
