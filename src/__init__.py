@@ -1,5 +1,6 @@
 """Speculatores Pivot Optimizer — public API."""
 
+from .indicators import Params
 from .detector import SpeculatorDetector
 from .scoring import (
     PIVOT_SCALES,
@@ -21,6 +22,7 @@ from .validation import (
 )
 
 __all__ = [
+    "Params",
     "SpeculatorDetector",
     "PIVOT_SCALES",
     "label_pivots",
