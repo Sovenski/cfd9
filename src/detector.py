@@ -136,7 +136,7 @@ class SpeculatorDetector:
 
         # --- Trend — HIGH side ---
         slope_delta_high = max(round(p.S_detect_high / 4), 2)
-        sma_val_high = sma(close, p.S_detect_high)
+        sma_val_high = sma_detect_high
         slope_val_high = (
             nz(sma_val_high - sma_val_high.shift(slope_delta_high), 0.0)
             / (slope_delta_high * sma_val_high.clip(lower=1e-9))
@@ -152,7 +152,7 @@ class SpeculatorDetector:
 
         # --- Trend — LOW side ---
         slope_delta_low = max(round(p.S_detect_low / 4), 2)
-        sma_val_low = sma(close, p.S_detect_low)
+        sma_val_low = sma_detect_low
         slope_val_low = (
             nz(sma_val_low - sma_val_low.shift(slope_delta_low), 0.0)
             / (slope_delta_low * sma_val_low.clip(lower=1e-9))
@@ -393,7 +393,7 @@ class SpeculatorDetector:
 
             # --- Gate pass ---
             gate_h = (
-                bool(price_high_ok_arr[t])
+                (not _USE_PRICE_GATE or bool(price_high_ok_arr[t]))
                 and bool(ms_agree_high_arr[t])
                 and dur_high_flag
                 and not bool(scale_div_high_arr[t])
@@ -401,7 +401,7 @@ class SpeculatorDetector:
                 and not (_USE_PIVOT_DRIFT and drift_gate_up_high)
             )
             gate_l = (
-                bool(price_low_ok_arr[t])
+                (not _USE_PRICE_GATE or bool(price_low_ok_arr[t]))
                 and bool(ms_agree_low_arr[t])
                 and dur_low_flag
                 and not bool(scale_div_low_arr[t])
