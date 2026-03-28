@@ -3,16 +3,16 @@ indicator("Speculatores V14 Presets - Per-Side Regimes", overlay=true, max_bars_
 
 // Preset architecture:
 // - Gold 1D Current: exact final 500-run HIGH/LOW winners from the optimizer logs
-// - SPX 1D 2026-03-28: staging slot for the next completed optimization run
+// - SPX 1D Latest: dedicated paste target for the latest completed SPX optimizer run
 // Gold 1D Current winners:
 // - HIGH: trial 292, score 0.33373417096497426
 // - LOW:  trial 465, score 0.40781242900926357
-// SPX 1D 2026-03-28 winners:
+// SPX 1D Latest staging values:
 // - HIGH: trial 75, score 0.404637
 // - LOW:  trial 2,  score 0.193138
 
 string GRP_PRESET = "Preset"
-string preset = input.string("Gold 1D Current", "Config Preset", options=["Gold 1D Current", "SPX 1D 2026-03-28", "Legacy V11 Gold"], group=GRP_PRESET)
+string preset = input.string("Gold 1D Current", "Config Preset", options=["Gold 1D Current", "SPX 1D Latest", "Legacy V11 Gold"], group=GRP_PRESET)
 
 string GRP_DI = "Display"
 show_bg = input.bool(true, "Show Background Shading", group=GRP_DI)
@@ -89,89 +89,89 @@ calc_har_vol() =>
 
 // Preset configs.
 bool is_gold_current = preset == "Gold 1D Current"
-bool is_gold_next = preset == "SPX 1D 2026-03-28"
+bool is_spx_latest = preset == "SPX 1D Latest"
 bool is_legacy = preset == "Legacy V11 Gold"
 
-// "SPX 1D 2026-03-28" — optimizer run on SPX 1D, completed 2026-03-28.
+// "SPX 1D Latest" is the dedicated paste target for the latest completed SPX run.
 int baseline_lb = 20
 
-int S_detect_high = is_gold_current ? 12 : is_gold_next ? 50 : 22
-int scale_start_high = is_gold_current ? 3 : is_gold_next ? 19 : 16
-int scale_end_high = is_gold_current ? 270 : is_gold_next ? 149 : 270
-int scale_step_high = is_gold_current ? 3 : is_gold_next ? 19 : 4
-int min_duration_high = is_gold_current ? 13 : is_gold_next ? 4 : 5
-int cooldown_bars_high = is_gold_current ? 9 : is_gold_next ? 14 : 2
-int price_gate_lb_high = is_gold_current ? 23 : is_gold_next ? 16 : 25
-int vola_range_len_high = is_gold_current ? 120 : is_gold_next ? 147 : 100
-int er_period_high = is_gold_current ? 28 : is_gold_next ? 6 : 5
-float pct_extreme_high = is_gold_current ? 0.96 : is_gold_next ? 0.7752 : 0.90
-float min_agreement_high = is_gold_current ? 0.75 : is_gold_next ? 0.6455 : 0.30
-float dur_extreme_pct_high = is_gold_current ? 0.83 : is_gold_next ? 0.6217 : 0.93
-int confirm_count_high = is_gold_current ? 5 : is_gold_next ? 3 : 1
-float vol_surge_thresh_high = is_gold_current ? 1.5 : is_gold_next ? 2.4506 : 2.0
-float scale_div_thresh_high = is_gold_current ? 0.35 : is_gold_next ? 0.2968 : 0.40
-float slope_thresh_high = is_gold_current ? 0.22 : is_gold_next ? 0.0762 : 0.04
-float vola_high_pct_high = is_gold_current ? 0.92 : is_gold_next ? 0.5329 : 0.71
-float vola_low_pct_high = is_gold_current or is_gold_next ? 0.05 : 0.40
-int pivot_drift_lookback_high = is_gold_current ? 5 : is_gold_next ? 19 : 5
-float pivot_drift_thresh_high = is_gold_current ? 0.008 : is_gold_next ? 0.0099 : 0.009
-float pivot_drift_gate_mult_high = is_gold_current ? 8.0 : is_gold_next ? 3.7958 : 4.0
-int pivot_drift_confirm_bias_high = is_gold_current or is_gold_next ? 1 : 1
+int S_detect_high = is_gold_current ? 12 : is_spx_latest ? 50 : 22
+int scale_start_high = is_gold_current ? 3 : is_spx_latest ? 19 : 16
+int scale_end_high = is_gold_current ? 270 : is_spx_latest ? 149 : 270
+int scale_step_high = is_gold_current ? 3 : is_spx_latest ? 19 : 4
+int min_duration_high = is_gold_current ? 13 : is_spx_latest ? 4 : 5
+int cooldown_bars_high = is_gold_current ? 9 : is_spx_latest ? 14 : 2
+int price_gate_lb_high = is_gold_current ? 23 : is_spx_latest ? 16 : 25
+int vola_range_len_high = is_gold_current ? 120 : is_spx_latest ? 147 : 100
+int er_period_high = is_gold_current ? 28 : is_spx_latest ? 6 : 5
+float pct_extreme_high = is_gold_current ? 0.96 : is_spx_latest ? 0.7752 : 0.90
+float min_agreement_high = is_gold_current ? 0.75 : is_spx_latest ? 0.6455 : 0.30
+float dur_extreme_pct_high = is_gold_current ? 0.83 : is_spx_latest ? 0.6217 : 0.93
+int confirm_count_high = is_gold_current ? 5 : is_spx_latest ? 3 : 1
+float vol_surge_thresh_high = is_gold_current ? 1.5 : is_spx_latest ? 2.4506 : 2.0
+float scale_div_thresh_high = is_gold_current ? 0.35 : is_spx_latest ? 0.2968 : 0.40
+float slope_thresh_high = is_gold_current ? 0.22 : is_spx_latest ? 0.0762 : 0.04
+float vola_high_pct_high = is_gold_current ? 0.92 : is_spx_latest ? 0.5329 : 0.71
+float vola_low_pct_high = is_gold_current or is_spx_latest ? 0.05 : 0.40
+int pivot_drift_lookback_high = is_gold_current ? 5 : is_spx_latest ? 19 : 5
+float pivot_drift_thresh_high = is_gold_current ? 0.008 : is_spx_latest ? 0.0099 : 0.009
+float pivot_drift_gate_mult_high = is_gold_current ? 8.0 : is_spx_latest ? 3.7958 : 4.0
+int pivot_drift_confirm_bias_high = 1
 bool use_price_gate_high = true
-bool use_er_gate_high = is_gold_current or is_gold_next ? false : false
+bool use_er_gate_high = is_gold_current ? false : is_spx_latest ? false : false
 bool use_pivot_drift_high = true
-bool er_directional_high = is_gold_next ? true : false
-bool use_trend_high = is_gold_next ? true : false
-bool use_volume_high = is_gold_next ? true : false
-bool use_momentum_high = is_gold_next ? true : false
-bool use_momentum_velocity_high = true
-bool use_volatility_high = is_gold_next ? true : false
-bool use_gjr_asym_high = is_gold_next ? true : false
-bool use_har_vol_high = is_gold_next ? true : false
-float gjr_vote_thresh_high = is_gold_next ? 0.3206 : 0.15
-float har_vote_thresh_high = is_gold_next ? 0.1516 : 0.15
-string momentum_velocity_mode_high = is_gold_current ? "Reversal" : is_gold_next ? "Trend" : "Reversal"
-float momentum_velocity_thresh_high = is_gold_current ? 0.014 : is_gold_next ? 0.0464 : 0.0
-string vola_method_high = is_gold_current ? "ATR" : is_gold_next ? "Intraday" : "StdDev"
+bool er_directional_high = is_gold_current ? false : is_spx_latest ? true : false
+bool use_trend_high = is_gold_current ? false : is_spx_latest ? true : false
+bool use_volume_high = is_gold_current ? false : is_spx_latest ? true : false
+bool use_momentum_high = is_gold_current ? false : is_spx_latest ? true : false
+bool use_momentum_velocity_high = is_gold_current ? true : is_spx_latest ? true : true
+bool use_volatility_high = is_gold_current ? false : is_spx_latest ? true : false
+bool use_gjr_asym_high = is_gold_current ? false : is_spx_latest ? true : false
+bool use_har_vol_high = is_gold_current ? false : is_spx_latest ? true : false
+float gjr_vote_thresh_high = is_gold_current ? 0.15 : is_spx_latest ? 0.3206 : 0.15
+float har_vote_thresh_high = is_gold_current ? 0.15 : is_spx_latest ? 0.1516 : 0.15
+string momentum_velocity_mode_high = is_gold_current ? "Reversal" : is_spx_latest ? "Trend" : "Reversal"
+float momentum_velocity_thresh_high = is_gold_current ? 0.014 : is_spx_latest ? 0.0464 : 0.0
+string vola_method_high = is_gold_current ? "ATR" : is_spx_latest ? "Intraday" : "StdDev"
 
-int S_detect_low = is_gold_current ? 26 : is_gold_next ? 48 : 22
-int scale_start_low = is_gold_current ? 19 : is_gold_next ? 16 : 16
-int scale_end_low = is_gold_current ? 250 : is_gold_next ? 309 : 270
-int scale_step_low = is_gold_current ? 15 : is_gold_next ? 10 : 4
-int min_duration_low = is_gold_current ? 2 : is_gold_next ? 1 : 5
-int cooldown_bars_low = is_gold_current ? 7 : is_gold_next ? 3 : 2
-int price_gate_lb_low = is_gold_current ? 58 : is_gold_next ? 8 : 25
-int vola_range_len_low = is_gold_current ? 20 : is_gold_next ? 135 : 100
-int er_period_low = is_gold_current ? 47 : is_gold_next ? 22 : 5
-float pct_extreme_low = is_gold_current ? 0.85 : is_gold_next ? 0.8190 : 0.90
-float min_agreement_low = is_gold_current ? 0.30 : is_gold_next ? 0.7044 : 0.30
-float dur_extreme_pct_low = is_gold_current ? 0.72 : is_gold_next ? 0.6121 : 0.93
-int confirm_count_low = is_gold_current or is_gold_next ? 3 : 1
-float vol_surge_thresh_low = is_gold_current ? 2.2 : is_gold_next ? 1.1540 : 2.0
-float scale_div_thresh_low = is_gold_current ? 0.39 : is_gold_next ? 0.2449 : 0.40
-float slope_thresh_low = is_gold_current ? 0.15 : is_gold_next ? 0.0890 : 0.04
-float vola_high_pct_low = is_gold_current ? 0.78 : is_gold_next ? 0.9556 : 0.71
-float vola_low_pct_low = is_gold_current or is_gold_next ? 0.07 : 0.40
-int pivot_drift_lookback_low = is_gold_current ? 10 : is_gold_next ? 19 : 3
-float pivot_drift_thresh_low = is_gold_current ? 0.005 : is_gold_next ? 0.0406 : 0.009
-float pivot_drift_gate_mult_low = is_gold_current ? 4.0 : is_gold_next ? 6.7006 : 4.0
-int pivot_drift_confirm_bias_low = is_gold_current or is_gold_next ? 0 : 1
+int S_detect_low = is_gold_current ? 26 : is_spx_latest ? 48 : 22
+int scale_start_low = is_gold_current ? 19 : is_spx_latest ? 16 : 16
+int scale_end_low = is_gold_current ? 250 : is_spx_latest ? 309 : 270
+int scale_step_low = is_gold_current ? 15 : is_spx_latest ? 10 : 4
+int min_duration_low = is_gold_current ? 2 : is_spx_latest ? 1 : 5
+int cooldown_bars_low = is_gold_current ? 7 : is_spx_latest ? 3 : 2
+int price_gate_lb_low = is_gold_current ? 58 : is_spx_latest ? 8 : 25
+int vola_range_len_low = is_gold_current ? 20 : is_spx_latest ? 135 : 100
+int er_period_low = is_gold_current ? 47 : is_spx_latest ? 22 : 5
+float pct_extreme_low = is_gold_current ? 0.85 : is_spx_latest ? 0.8190 : 0.90
+float min_agreement_low = is_gold_current ? 0.30 : is_spx_latest ? 0.7044 : 0.30
+float dur_extreme_pct_low = is_gold_current ? 0.72 : is_spx_latest ? 0.6121 : 0.93
+int confirm_count_low = is_gold_current ? 3 : is_spx_latest ? 3 : 1
+float vol_surge_thresh_low = is_gold_current ? 2.2 : is_spx_latest ? 1.1540 : 2.0
+float scale_div_thresh_low = is_gold_current ? 0.39 : is_spx_latest ? 0.2449 : 0.40
+float slope_thresh_low = is_gold_current ? 0.15 : is_spx_latest ? 0.0890 : 0.04
+float vola_high_pct_low = is_gold_current ? 0.78 : is_spx_latest ? 0.9556 : 0.71
+float vola_low_pct_low = is_gold_current or is_spx_latest ? 0.07 : 0.40
+int pivot_drift_lookback_low = is_gold_current ? 10 : is_spx_latest ? 19 : 3
+float pivot_drift_thresh_low = is_gold_current ? 0.005 : is_spx_latest ? 0.0406 : 0.009
+float pivot_drift_gate_mult_low = is_gold_current ? 4.0 : is_spx_latest ? 6.7006 : 4.0
+int pivot_drift_confirm_bias_low = is_gold_current ? 0 : is_spx_latest ? 0 : 1
 bool use_price_gate_low = true
-bool use_er_gate_low = is_gold_next ? true : false
+bool use_er_gate_low = is_gold_current ? false : is_spx_latest ? true : false
 bool use_pivot_drift_low = true
-bool er_directional_low = is_gold_next ? true : false
-bool use_trend_low = false
-bool use_volume_low = is_gold_next ? true : false
-bool use_momentum_low = false
-bool use_momentum_velocity_low = is_gold_next ? false : true
-bool use_volatility_low = is_gold_next ? false : true
-bool use_gjr_asym_low = false
-bool use_har_vol_low = is_gold_next ? true : false
-float gjr_vote_thresh_low = is_gold_next ? 0.4117 : 0.15
-float har_vote_thresh_low = is_gold_next ? 0.1340 : 0.15
-string momentum_velocity_mode_low = is_gold_next ? "Trend" : "Reversal"
-float momentum_velocity_thresh_low = is_gold_current ? 0.007 : is_gold_next ? 0.0436 : 0.0
-string vola_method_low = is_gold_current ? "ATR" : is_gold_next ? "StdDev" : "StdDev"
+bool er_directional_low = is_gold_current ? false : is_spx_latest ? true : false
+bool use_trend_low = is_gold_current ? false : is_spx_latest ? false : false
+bool use_volume_low = is_gold_current ? false : is_spx_latest ? true : false
+bool use_momentum_low = is_gold_current ? false : is_spx_latest ? false : false
+bool use_momentum_velocity_low = is_gold_current ? true : is_spx_latest ? false : true
+bool use_volatility_low = is_gold_current ? true : is_spx_latest ? false : true
+bool use_gjr_asym_low = is_gold_current ? false : is_spx_latest ? false : false
+bool use_har_vol_low = is_gold_current ? false : is_spx_latest ? true : false
+float gjr_vote_thresh_low = is_gold_current ? 0.15 : is_spx_latest ? 0.4117 : 0.15
+float har_vote_thresh_low = is_gold_current ? 0.15 : is_spx_latest ? 0.1340 : 0.15
+string momentum_velocity_mode_low = is_gold_current ? "Reversal" : is_spx_latest ? "Trend" : "Reversal"
+float momentum_velocity_thresh_low = is_gold_current ? 0.007 : is_spx_latest ? 0.0436 : 0.0
+string vola_method_low = is_gold_current ? "ATR" : is_spx_latest ? "StdDev" : "StdDev"
 
 // Derived lookbacks.
 int slope_delta_high = math.max(math.round(S_detect_high / 4), 2)
