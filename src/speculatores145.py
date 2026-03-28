@@ -31,8 +31,8 @@ from .indicators import Params
 from .parity import compare_python_to_tv, find_matching_enriched_export
 from .scoring import compute_side_score
 from .validation import (
-    FOLD_DEFINITIONS,
     build_optuna_objective,
+    describe_validation_scheme,
     evaluate_params_on_prepared_folds,
     load_cross_asset,
     load_data,
@@ -520,7 +520,7 @@ def evaluate_folds_for_params(
         rows.append(
             {
                 "fold": idx + 1,
-                "oos_period": f"{FOLD_DEFINITIONS[idx][2][:7]} – {FOLD_DEFINITIONS[idx][3][:7]}",
+                "oos_period": f"{df_oos.index[0].strftime('%Y-%m-%d')} – {df_oos.index[-1].strftime('%Y-%m-%d')}",
                 "is_bars": len(df_is_r),
                 "oos_bars": len(df_oos_r),
                 "is_signals": int(det_is[sig_key].sum()),
@@ -790,6 +790,7 @@ def render_report(
     study_high: optuna.Study,
     study_low: optuna.Study,
     df_primary: pd.DataFrame,
+    validation_info: dict[str, Any],
     default_run: dict[str, Any],
     high_folds: pd.DataFrame,
     low_folds: pd.DataFrame,
@@ -831,6 +832,9 @@ def render_report(
         "",
         f"- Source path: `{config.dataset_path}`",
         f"- Index range: `{df_primary.index[0]}` → `{df_primary.index[-1]}`",
+        f"- Validation mode: `{validation_info['mode']}`",
+        f"- Holdout mode: `{validation_info['holdout_mode']}`",
+        f"- Walk-forward folds: `{validation_info['n_folds']}`",
         "",
         "## Cell 3 — Verify Default Params",
         "",
@@ -953,6 +957,7 @@ def run_full_pipeline(config: RunConfig) -> Path:
         format="%(asctime)s %(levelname)s %(name)s: %(message)s",
     )
     df_primary = load_data(config.dataset_path)
+    validation_info = describe_validation_scheme(df_primary)
     default_run = run_default_detector(df_primary)
     studies = run_parallel_studies(config)
     study_high = studies["high"]
@@ -995,6 +1000,7 @@ def run_full_pipeline(config: RunConfig) -> Path:
         study_high=study_high,
         study_low=study_low,
         df_primary=df_primary,
+        validation_info=validation_info,
         default_run=default_run,
         high_folds=high_folds,
         low_folds=low_folds,
