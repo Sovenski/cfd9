@@ -49,6 +49,10 @@ for _ in range(10_000):
         print('LOG TAIL')
         lines = LOG_PATH.read_text(encoding='utf-8', errors='replace').splitlines()
         print('\n'.join(lines[-30:]))
+        if any('Speculatores 14.5 report written to:' in line for line in lines[-30:]):
+            PID_PATH.unlink(missing_ok=True)
+            print('\nRun process finished.')
+            break
 
     if PID_PATH.exists():
         try:
