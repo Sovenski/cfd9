@@ -26,6 +26,18 @@ class StudyProgress:
     median_value: float | None
 
 
+@dataclass(frozen=True)
+class RunProgress:
+    total_done: int
+    target: int
+    running: int
+    completed: int
+    pruned: int
+    failed: int
+    high: StudyProgress
+    low: StudyProgress
+
+
 def make_storage(storage_path: str | Path) -> JournalStorage:
     storage_path = Path(storage_path)
     storage_path.parent.mkdir(parents=True, exist_ok=True)
@@ -75,15 +87,33 @@ def summarize_run(
     study_prefix: str,
     dataset_version: str,
     target: int,
-) -> dict[str, StudyProgress]:
-    result: dict[str, StudyProgress] = {}
+) -> RunProgress:
+    studies: dict[str, StudyProgress] = {}
     for side in ("high", "low"):
         study_name = f"{study_prefix}_{dataset_version}_{side}"
-        result[side] = summarize_study(storage_path, study_name, side, target)
-    return result
+        studies[side] = summarize_study(storage_path, study_name, side, target)
+    return RunProgress(
+        total_done=studies["high"].total_done + studies["low"].total_done,
+        target=(2 * target),
+        running=studies["high"].running + studies["low"].running,
+        completed=studies["high"].completed + studies["low"].completed,
+        pruned=studies["high"].pruned + studies["low"].pruned,
+        failed=studies["high"].failed + studies["low"].failed,
+        high=studies["high"],
+        low=studies["low"],
+    )
 
 
-def progress_dict(progress: StudyProgress) -> dict[str, Any]:
+def progress_dict(progress: StudyProgress | RunProgress) -> dict[str, Any]:
+    if isinstance(progress, RunProgress):
+        return {
+            "total_done": progress.total_done,
+            "target": progress.target,
+            "running": progress.running,
+            "completed": progress.completed,
+            "pruned": progress.pruned,
+            "failed": progress.failed,
+        }
     return {
         "side": progress.side,
         "study_name": progress.study_name,
