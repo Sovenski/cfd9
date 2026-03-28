@@ -21,6 +21,10 @@ logger = logging.getLogger(__name__)
 PIVOT_SCALES: list[int] = [5, 10, 20, 50, 100, 200, 500]
 MIN_RATE: float = 0.003   # Minimum signal frequency (smooth floor denominator)
 GAMMA: float = 2.0        # IS-OOS overfitting penalty multiplier
+SCALE_SIGNAL_FLOOR: int = 4
+MATCHED_PIVOT_FLOOR: int = 4
+POSTERIOR_ALPHA: float = 1.0
+POSTERIOR_BETA: float = 4.0
 
 
 # ---------------------------------------------------------------------------
@@ -95,12 +99,12 @@ def add_pivot_labels(df: pd.DataFrame) -> pd.DataFrame:
 # ---------------------------------------------------------------------------
 
 
-def precision_at_n(
+def precision_at_n_stats(
     signals: pd.Series,
     pivots: pd.Series,
     side: str,
     n: int,
-) -> float:
+) -> dict[str, float | int]:
     """Lead-aware precision at scale N for one side.
 
     A signal at bar ``t`` is a true positive if a pivot of the correct sign
@@ -114,15 +118,17 @@ def precision_at_n(
         n: Lookahead window size (same as pivot scale N).
 
     Returns:
-        Precision = TP / (TP + FP).  Returns 0.0 if no signals.
+        Dict with precision, tp, fp, n_signals, matched_pivots, total_pivots.
     """
     if side not in ("high", "low"):
         raise ValueError(f"side must be 'high' or 'low', got {side!r}")
     pivot_sign = 1 if side == "high" else -1
     signal_bars = signals[signals].index
+    pivot_positions = np.flatnonzero((pivots.values == pivot_sign))
 
     tp = 0
     fp = 0
+    matched_pivots: set[int] = set()
     for t in signal_bars:
         pos = signals.index.get_loc(t)
         window_start = max(0, pos - 2)
@@ -130,12 +136,33 @@ def precision_at_n(
         window = pivots.iloc[window_start : window_end + 1]
         if (window == pivot_sign).any():
             tp += 1
+            window_positions = pivot_positions[
+                (pivot_positions >= window_start) & (pivot_positions <= window_end)
+            ]
+            matched_pivots.update(int(idx) for idx in window_positions.tolist())
         else:
             fp += 1
 
-    if tp + fp == 0:
-        return 0.0
-    return tp / (tp + fp)
+    n_signals = tp + fp
+    precision = (tp / n_signals) if n_signals else 0.0
+    return {
+        "precision": precision,
+        "tp": tp,
+        "fp": fp,
+        "n_signals": n_signals,
+        "matched_pivots": len(matched_pivots),
+        "total_pivots": int(len(pivot_positions)),
+    }
+
+
+def precision_at_n(
+    signals: pd.Series,
+    pivots: pd.Series,
+    side: str,
+    n: int,
+) -> float:
+    """Backward-compatible scalar precision wrapper."""
+    return float(precision_at_n_stats(signals, pivots, side, n)["precision"])
 
 
 # ---------------------------------------------------------------------------
@@ -180,9 +207,18 @@ def compute_side_score(
     for N in PIVOT_SCALES:
         col = f"pivot_N{N}"
         pivots = df[col]
-        prec = precision_at_n(signals, pivots, side, N)
+        stats = precision_at_n_stats(signals, pivots, side, N)
+        posterior_precision = (
+            (float(stats["tp"]) + POSTERIOR_ALPHA)
+            / (float(stats["n_signals"]) + POSTERIOR_ALPHA + POSTERIOR_BETA)
+            if int(stats["n_signals"]) > 0
+            else 0.0
+        )
+        signal_support = min(1.0, float(stats["n_signals"]) / SCALE_SIGNAL_FLOOR)
+        pivot_support = min(1.0, float(stats["matched_pivots"]) / MATCHED_PIVOT_FLOOR)
+        support = signal_support * pivot_support
         weight = np.log(N) / np.log(500)
-        raw_score += weight * prec
+        raw_score += weight * posterior_precision * support
 
     logger.debug(
         "compute_side_score side=%s n_signals=%d rate=%.4f ff=%.3f raw=%.4f",
@@ -331,7 +367,7 @@ if __name__ == "__main__":
         assert col in df.columns, f"Missing column {col}"
     logger.info("Test 3 PASSED: add_pivot_labels added all %d pivot columns", len(PIVOT_SCALES))
 
-    # --- Test 4: precision_at_n returns 1.0 when signals align with pivots at N=5 ---
+    # --- Test 4: precision_at_n_stats returns 1.0 when signals align with pivots at N=5 ---
     pivot_high_bars = df.index[df["pivot_N5"] == 1]
     if len(pivot_high_bars) == 0:
         logger.warning("No pivot highs found at N=5; skipping precision test")
@@ -339,11 +375,29 @@ if __name__ == "__main__":
         # Signals exactly at pivot high bars → precision should be 1.0
         perfect_signals = pd.Series(False, index=df.index)
         perfect_signals.iloc[pivot_high_bars[:5]] = True
-        prec = precision_at_n(perfect_signals, df["pivot_N5"], "high", 5)
-        assert prec == 1.0, f"Expected precision 1.0, got {prec:.4f}"
-        logger.info("Test 4 PASSED: precision_at_n returns 1.0 for perfectly aligned signals")
+        stats = precision_at_n_stats(perfect_signals, df["pivot_N5"], "high", 5)
+        assert stats["precision"] == 1.0, f"Expected precision 1.0, got {stats['precision']:.4f}"
+        assert stats["matched_pivots"] >= 1
+        logger.info("Test 4 PASSED: precision_at_n_stats returns 1.0 for perfectly aligned signals")
 
-    # --- Test 5: compute_side_score returns value in [0, 1] ---
+    # --- Test 5: one lucky perfect pivot is penalized vs. several matched pivots ---
+    one_signal = pd.Series(False, index=df.index)
+    many_signals = pd.Series(False, index=df.index)
+    if len(pivot_high_bars) >= 4:
+        one_signal.iloc[pivot_high_bars[:1]] = True
+        many_signals.iloc[pivot_high_bars[:4]] = True
+        score_one = compute_side_score(df, one_signal, "high")
+        score_many = compute_side_score(df, many_signals, "high")
+        assert score_many > score_one, (
+            f"Expected multi-pivot score {score_many:.4f} > one-pivot score {score_one:.4f}"
+        )
+        logger.info(
+            "Test 5 PASSED: distinct-pivot support works (one=%.4f, many=%.4f)",
+            score_one,
+            score_many,
+        )
+
+    # --- Test 6: compute_side_score returns value in [0, theoretical max] ---
     # Use a moderate signal rate (~1% of bars)
     signal_idx = np.random.choice(df.index, size=20, replace=False)
     signals_high = pd.Series(False, index=df.index)
@@ -358,10 +412,10 @@ if __name__ == "__main__":
     assert score_high <= max_weight_sum + 1e-9, (
         f"score_high={score_high:.4f} exceeds theoretical max {max_weight_sum:.4f}"
     )
-    logger.info("Test 5 PASSED: compute_side_score = %.4f (in valid range [0, %.4f])",
+    logger.info("Test 6 PASSED: compute_side_score = %.4f (in valid range [0, %.4f])",
                 score_high, max_weight_sum)
 
-    # --- Test 6: fold_score_high / fold_score_low run without error ---
+    # --- Test 7: fold_score_high / fold_score_low run without error ---
     mid = len(df) // 2
     df_is = df.iloc[:mid].copy()
     df_oos = df.iloc[mid:].copy()
@@ -372,7 +426,7 @@ if __name__ == "__main__":
     fs_low = fold_score_low(df_is, df_oos, sig_is, sig_oos)
     assert isinstance(fs_high, float)
     assert isinstance(fs_low, float)
-    logger.info("Test 6 PASSED: fold_score_high=%.4f  fold_score_low=%.4f", fs_high, fs_low)
+    logger.info("Test 7 PASSED: fold_score_high=%.4f  fold_score_low=%.4f", fs_high, fs_low)
 
     logger.info("scoring.py self-test PASSED")
     print("\nscoring.py self-test PASSED")
