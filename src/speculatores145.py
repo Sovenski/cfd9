@@ -300,7 +300,10 @@ def params_from_trial(trial: optuna.Trial, side: str) -> Params:
 
 def make_storage(storage_path: Path) -> JournalStorage:
     storage_path.parent.mkdir(parents=True, exist_ok=True)
-    lock_obj = JournalFileOpenLock(str(storage_path)) if os.name == "nt" else None
+    # Google Drive mounts in Colab do not support Optuna's default symlink lock.
+    # Use the file-open lock everywhere so the same runner works on Windows,
+    # Linux, and Drive-backed filesystems.
+    lock_obj = JournalFileOpenLock(str(storage_path))
     return JournalStorage(JournalFileBackend(str(storage_path), lock_obj=lock_obj))
 
 
