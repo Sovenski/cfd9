@@ -23,7 +23,7 @@ from .scoring import add_pivot_labels, fold_score_high, fold_score_low
 
 logger = logging.getLogger(__name__)
 
-MIN_SIGNALS_PER_FOLD: int = 6
+MIN_SIGNALS_PER_FOLD: int = 1
 DEFAULT_HOLDOUT_FRACTION: float = 0.2
 DEFAULT_N_FOLDS: int = 5
 MIN_TRAIN_BARS: int = 252
@@ -342,10 +342,10 @@ def evaluate_params_on_prepared_folds(
             n_is_signals = int(sig_low_is.sum())
             n_oos_signals = int(sig_low_oos.sum())
 
-        support_factor = min(1.0, n_is_signals / MIN_SIGNALS_PER_FOLD) * min(
-            1.0, n_oos_signals / MIN_SIGNALS_PER_FOLD
-        )
-        fold_scores.append(score * support_factor)
+        if n_is_signals < MIN_SIGNALS_PER_FOLD or n_oos_signals < MIN_SIGNALS_PER_FOLD:
+            fold_scores.append(0.0)
+        else:
+            fold_scores.append(score)
     return fold_scores
 
 
