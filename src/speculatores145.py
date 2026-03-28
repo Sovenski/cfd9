@@ -163,6 +163,12 @@ def params_to_dict(params: Params) -> dict[str, Any]:
     return {field.name: getattr(params, field.name) for field in dataclasses.fields(params)}
 
 
+def _pretty_value(value: Any, digits: int = 4) -> Any:
+    if isinstance(value, float):
+        return round(value, digits)
+    return value
+
+
 def _params_fields(p: Params) -> dict[str, Any]:
     return {field.name: getattr(p, field.name) for field in dataclasses.fields(p)}
 
@@ -626,10 +632,12 @@ def render_report(
         study_high.best_trial.params, orient="index", columns=["value"]
     ).reset_index(names="param")
     best_high_df["param"] = best_high_df["param"].str.replace("^high_", "", regex=True)
+    best_high_df["value"] = best_high_df["value"].map(_pretty_value)
     best_low_df = pd.DataFrame.from_dict(
         study_low.best_trial.params, orient="index", columns=["value"]
     ).reset_index(names="param")
     best_low_df["param"] = best_low_df["param"].str.replace("^low_", "", regex=True)
+    best_low_df["value"] = best_low_df["value"].map(_pretty_value)
     dataset_version = dataset_version_from_path(config.dataset_path)
     lines = [
         f"# {VERSION} Run Report",

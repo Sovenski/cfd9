@@ -1,0 +1,116 @@
+# Cell 5 — Monitor progress
+import time
+from pathlib import Path
+from IPython.display import clear_output
+import optuna
+from optuna.storages import JournalStorage
+from optuna.storages.journal import JournalFileBackend, JournalFileOpenLock
+from optuna.trial import TrialState
+
+DRIVE_ROOT = globals().get("DRIVE_ROOT", Path("/content/drive/MyDrive/cfd9"))
+STORAGE = globals().get("STORAGE", DRIVE_ROOT / "spec145_spx.journal")
+LOG_PATH = globals().get("LOG_PATH", DRIVE_ROOT / "spec145_spx.log")
+PID_PATH = globals().get("PID_PATH", DRIVE_ROOT / "spec145_spx.pid")
+STUDY_PREFIX = globals().get("STUDY_PREFIX", "speculatores_14_5")
+
+
+def _dataset_version_from_path(path: str) -> str:
+    return Path(path).stem
+
+
+def _bar(done: int, total: int, width: int = 24) -> str:
+    total = max(total, 1)
+    done = min(done, total)
+    filled = int(width * done / total)
+    return '[' + '#' * filled + '-' * (width - filled) + f'] {done}/{total}'
+
+
+def _median(values):
+    if not values:
+        return None
+    values = sorted(values)
+    mid = len(values) // 2
+    if len(values) % 2:
+        return values[mid]
+    return (values[mid - 1] + values[mid]) / 2.0
+
+
+def _make_storage(storage_path):
+    return JournalStorage(
+        JournalFileBackend(str(storage_path), lock_obj=JournalFileOpenLock(str(storage_path)))
+    )
+
+
+def _summarize_study(storage_path, study_name, target):
+    storage = _make_storage(storage_path)
+    study = optuna.load_study(study_name=study_name, storage=storage)
+
+    complete_trials = [t for t in study.trials if t.state == TrialState.COMPLETE]
+    pruned_trials = [t for t in study.trials if t.state == TrialState.PRUNED]
+    failed_trials = [t for t in study.trials if t.state == TrialState.FAIL]
+    running_trials = [t for t in study.trials if t.state == TrialState.RUNNING]
+    values = [float(t.value) for t in complete_trials if t.value is not None]
+
+    return {
+        "completed": len(complete_trials),
+        "pruned": len(pruned_trials),
+        "failed": len(failed_trials),
+        "running": len(running_trials),
+        "total_done": len(complete_trials) + len(pruned_trials) + len(failed_trials),
+        "target": target,
+        "best_value": max(values) if values else None,
+        "median_value": _median(values),
+    }
+
+
+dataset_version = _dataset_version_from_path(DATASET)
+
+for _ in range(10_000):
+    clear_output(wait=True)
+    pid_text = PID_PATH.read_text().strip() if PID_PATH.exists() else 'not running'
+    print(f'PID: {pid_text}')
+    print(f'Storage: {STORAGE}')
+    print(f'Log: {LOG_PATH}')
+    print('')
+    try:
+        for side in ('high', 'low'):
+            study_name = f"{STUDY_PREFIX}_{dataset_version}_{side}"
+            info = _summarize_study(STORAGE, study_name, TRIALS_PER_SIDE)
+            print(side.upper())
+            print(_bar(info['total_done'], info['target']))
+            print(f"running={info['running']} complete={info['completed']} pruned={info['pruned']} failed={info['failed']}")
+            print(f"best={info['best_value']} median={info['median_value']}")
+            print('')
+    except Exception as exc:
+        print(f'Progress unavailable yet: {exc}')
+        print('')
+
+    if LOG_PATH.exists():
+        print('LOG TAIL')
+        lines = LOG_PATH.read_text(encoding='utf-8', errors='replace').splitlines()
+        print('\n'.join(lines[-30:]))
+
+    if PID_PATH.exists():
+        try:
+            import os
+            os.kill(int(PID_PATH.read_text().strip()), 0)
+        except OSError:
+            PID_PATH.unlink(missing_ok=True)
+            print('\nRun process finished.')
+            break
+    else:
+        print('\nRun process finished.')
+        break
+    time.sleep(10)
+
+
+# Cell 6 — Show latest report path and preview
+from pathlib import Path
+
+reports = sorted(Path(RESULTS_DIR).glob('*.md'), key=lambda p: p.stat().st_mtime, reverse=True)
+assert reports, 'No reports found.'
+
+latest_report = reports[0]
+print(f'Latest report: {latest_report}')
+lines = latest_report.read_text(encoding='utf-8').splitlines()
+print('\n'.join(lines[:220]))
