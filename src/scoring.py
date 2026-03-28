@@ -25,6 +25,7 @@ SCALE_SIGNAL_FLOOR: int = 4
 MATCHED_PIVOT_FLOOR: int = 4
 POSTERIOR_ALPHA: float = 1.0
 POSTERIOR_BETA: float = 4.0
+PIVOT_COUNT_TOLERANCE: float = 0.5
 
 
 # ---------------------------------------------------------------------------
@@ -175,20 +176,7 @@ def compute_side_score(
     signals: pd.Series,
     side: str,
 ) -> float:
-    """Precision-weighted score for one detector side.
-
-    Computes a weighted sum of precision_at_n over all PIVOT_SCALES, then
-    applies a smooth frequency floor factor (``min(1, rate / MIN_RATE)``).
-
-    Args:
-        df: OHLCV DataFrame (pivot label columns are added lazily if missing).
-        signals: Boolean Series aligned to df's index — True where signal fired.
-        side: "high" or "low".
-
-    Returns:
-        Raw score in [0, ~7] * frequency_factor ∈ [0, 1].
-        In practice bounded by the sum of log-weights ≤ 1.0 per scale.
-    """
+    """Support-aware score for one detector side."""
     if side not in ("high", "low"):
         raise ValueError(f"side must be 'high' or 'low', got {side!r}")
     n_bars = len(df)
@@ -208,17 +196,45 @@ def compute_side_score(
         col = f"pivot_N{N}"
         pivots = df[col]
         stats = precision_at_n_stats(signals, pivots, side, N)
+        n_scale_signals = float(stats["n_signals"])
+        matched_pivots = float(stats["matched_pivots"])
+        total_pivots = float(stats["total_pivots"])
         posterior_precision = (
             (float(stats["tp"]) + POSTERIOR_ALPHA)
-            / (float(stats["n_signals"]) + POSTERIOR_ALPHA + POSTERIOR_BETA)
-            if int(stats["n_signals"]) > 0
+            / (n_scale_signals + POSTERIOR_ALPHA + POSTERIOR_BETA)
+            if n_scale_signals > 0
             else 0.0
         )
-        signal_support = min(1.0, float(stats["n_signals"]) / SCALE_SIGNAL_FLOOR)
-        pivot_support = min(1.0, float(stats["matched_pivots"]) / MATCHED_PIVOT_FLOOR)
+        posterior_recall = (
+            (matched_pivots + POSTERIOR_ALPHA)
+            / (total_pivots + POSTERIOR_ALPHA + POSTERIOR_BETA)
+            if total_pivots > 0
+            else 0.0
+        )
+        if posterior_precision > 0.0 and posterior_recall > 0.0:
+            balanced_quality = (
+                2.0 * posterior_precision * posterior_recall
+                / (posterior_precision + posterior_recall)
+            )
+        else:
+            balanced_quality = 0.0
+        signal_support = min(1.0, n_scale_signals / SCALE_SIGNAL_FLOOR)
+        pivot_support = min(1.0, matched_pivots / MATCHED_PIVOT_FLOOR)
         support = signal_support * pivot_support
+        if total_pivots > 0 and n_scale_signals > 0:
+            lower = max(1e-9, 1.0 - PIVOT_COUNT_TOLERANCE)
+            upper = 1.0 + PIVOT_COUNT_TOLERANCE
+            count_ratio = n_scale_signals / total_pivots
+            if count_ratio < lower:
+                count_alignment = count_ratio / lower
+            elif count_ratio > upper:
+                count_alignment = upper / count_ratio
+            else:
+                count_alignment = 1.0
+        else:
+            count_alignment = 0.0
         weight = np.log(N) / np.log(500)
-        raw_score += weight * posterior_precision * support
+        raw_score += weight * balanced_quality * support * count_alignment
 
     logger.debug(
         "compute_side_score side=%s n_signals=%d rate=%.4f ff=%.3f raw=%.4f",
@@ -397,7 +413,34 @@ if __name__ == "__main__":
             score_many,
         )
 
-    # --- Test 6: compute_side_score returns value in [0, theoretical max] ---
+    # --- Test 6: count alignment penalises under- and over-firing ---
+    if len(pivot_high_bars) >= 4:
+        aligned_signals = pd.Series(False, index=df.index)
+        under_signals = pd.Series(False, index=df.index)
+        over_signals = pd.Series(False, index=df.index)
+        aligned_positions = [int(idx) for idx in pivot_high_bars[:4]]
+        under_positions = aligned_positions[:1]
+        over_positions = aligned_positions + [min(len(df) - 1, aligned_positions[-1] + i + 1) for i in range(4)]
+        aligned_signals.iloc[aligned_positions] = True
+        under_signals.iloc[under_positions] = True
+        over_signals.iloc[over_positions] = True
+        aligned_score = compute_side_score(df, aligned_signals, "high")
+        under_score = compute_side_score(df, under_signals, "high")
+        over_score = compute_side_score(df, over_signals, "high")
+        assert aligned_score > under_score, (
+            f"Expected aligned score {aligned_score:.4f} > under-fired score {under_score:.4f}"
+        )
+        assert aligned_score > over_score, (
+            f"Expected aligned score {aligned_score:.4f} > over-fired score {over_score:.4f}"
+        )
+        logger.info(
+            "Test 6 PASSED: count alignment works (aligned=%.4f, under=%.4f, over=%.4f)",
+            aligned_score,
+            under_score,
+            over_score,
+        )
+
+    # --- Test 7: compute_side_score returns value in [0, theoretical max] ---
     # Use a moderate signal rate (~1% of bars)
     signal_idx = np.random.choice(df.index, size=20, replace=False)
     signals_high = pd.Series(False, index=df.index)
@@ -412,10 +455,10 @@ if __name__ == "__main__":
     assert score_high <= max_weight_sum + 1e-9, (
         f"score_high={score_high:.4f} exceeds theoretical max {max_weight_sum:.4f}"
     )
-    logger.info("Test 6 PASSED: compute_side_score = %.4f (in valid range [0, %.4f])",
+    logger.info("Test 7 PASSED: compute_side_score = %.4f (in valid range [0, %.4f])",
                 score_high, max_weight_sum)
 
-    # --- Test 7: fold_score_high / fold_score_low run without error ---
+    # --- Test 8: fold_score_high / fold_score_low run without error ---
     mid = len(df) // 2
     df_is = df.iloc[:mid].copy()
     df_oos = df.iloc[mid:].copy()
@@ -426,7 +469,7 @@ if __name__ == "__main__":
     fs_low = fold_score_low(df_is, df_oos, sig_is, sig_oos)
     assert isinstance(fs_high, float)
     assert isinstance(fs_low, float)
-    logger.info("Test 7 PASSED: fold_score_high=%.4f  fold_score_low=%.4f", fs_high, fs_low)
+    logger.info("Test 8 PASSED: fold_score_high=%.4f  fold_score_low=%.4f", fs_high, fs_low)
 
     logger.info("scoring.py self-test PASSED")
     print("\nscoring.py self-test PASSED")
