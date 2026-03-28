@@ -15,10 +15,16 @@ import pandas as pd
 import optuna
 
 from .indicators import Params
-from .detector import SpeculatorDetector
-from .scoring import fold_score_high, fold_score_low
+from .detector import (
+    DetectorArtifacts,
+    SpeculatorDetector,
+    build_detector_artifacts,
+)
+from .scoring import add_pivot_labels, fold_score_high, fold_score_low
 
 logger = logging.getLogger(__name__)
+
+MIN_SIGNALS_PER_FOLD: int = 6
 
 # ---------------------------------------------------------------------------
 # Walk-forward fold definitions
@@ -242,15 +248,31 @@ def build_optuna_objective(
             "Ensure df_full covers 1983-2008."
         )
 
+    prepared_folds: list[
+        tuple[pd.DataFrame, pd.DataFrame, DetectorArtifacts, DetectorArtifacts]
+    ] = []
+    for fold_idx, (df_is, df_oos) in enumerate(folds):
+        df_is_r = df_is.reset_index(drop=True)
+        df_oos_r = df_oos.reset_index(drop=True)
+        add_pivot_labels(df_is_r)
+        add_pivot_labels(df_oos_r)
+        logger.info(
+            "Precomputing fold %d artifacts: IS=%d bars, OOS=%d bars",
+            fold_idx + 1,
+            len(df_is_r),
+            len(df_oos_r),
+        )
+        artifacts_is = build_detector_artifacts(df_is_r)
+        artifacts_oos = build_detector_artifacts(df_oos_r)
+        prepared_folds.append((df_is_r, df_oos_r, artifacts_is, artifacts_oos))
+
     def objective(trial: optuna.Trial) -> float:
         params = params_from_trial(trial, side)
 
         fold_scores: list[float] = []
-        for fold_idx, (df_is, df_oos) in enumerate(folds):
-            df_is_r = df_is.reset_index(drop=True)
-            df_oos_r = df_oos.reset_index(drop=True)
-            det_is = SpeculatorDetector(df_is_r, params).run()
-            det_oos = SpeculatorDetector(df_oos_r, params).run()
+        for fold_idx, (df_is_r, df_oos_r, artifacts_is, artifacts_oos) in enumerate(prepared_folds):
+            det_is = SpeculatorDetector(df_is_r, params, artifacts_is).run()
+            det_oos = SpeculatorDetector(df_oos_r, params, artifacts_oos).run()
 
             sig_high_is = det_is["signal_high"]
             sig_low_is = det_is["signal_low"]
@@ -259,8 +281,17 @@ def build_optuna_objective(
 
             if side == "high":
                 score = fold_score_high(df_is_r, df_oos_r, sig_high_is, sig_high_oos)
+                n_is_signals = int(sig_high_is.sum())
+                n_oos_signals = int(sig_high_oos.sum())
             else:
                 score = fold_score_low(df_is_r, df_oos_r, sig_low_is, sig_low_oos)
+                n_is_signals = int(sig_low_is.sum())
+                n_oos_signals = int(sig_low_oos.sum())
+
+            support_factor = min(1.0, n_is_signals / MIN_SIGNALS_PER_FOLD) * min(
+                1.0, n_oos_signals / MIN_SIGNALS_PER_FOLD
+            )
+            score *= support_factor
 
             fold_scores.append(score)
 

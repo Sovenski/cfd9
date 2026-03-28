@@ -9,6 +9,7 @@ and cooldown logic.
 from __future__ import annotations
 
 import logging
+from dataclasses import dataclass
 from typing import Optional
 
 import numpy as np
@@ -41,6 +42,30 @@ _USE_PRICE_GATE: bool = True
 _USE_PIVOT_DRIFT: bool = True
 
 
+@dataclass(frozen=True)
+class DetectorArtifacts:
+    """Fold-invariant detector precomputations reused across trials."""
+
+    pir_matrix: np.ndarray
+    scales_list: list[int]
+    gjr_asym_norm: pd.Series
+    har_vol_norm: pd.Series
+
+
+def build_detector_artifacts(df: pd.DataFrame) -> DetectorArtifacts:
+    """Precompute expensive detector inputs that do not depend on Params."""
+    close = df["close"]
+    _, pir_matrix, scales_list = precompute_matrices(close, 2, 500)
+    gjr_asym_norm, _ = calc_gjr_asym(df)
+    har_vol_norm, _ = calc_har_vol(df)
+    return DetectorArtifacts(
+        pir_matrix=pir_matrix,
+        scales_list=scales_list,
+        gjr_asym_norm=gjr_asym_norm,
+        har_vol_norm=har_vol_norm,
+    )
+
+
 # ---------------------------------------------------------------------------
 # Helpers
 # ---------------------------------------------------------------------------
@@ -68,9 +93,17 @@ class SpeculatorDetector:
         params: Frozen Params dataclass with all detector parameters.
     """
 
-    def __init__(self, df: pd.DataFrame, params: Params) -> None:
+    def __init__(
+        self,
+        df: pd.DataFrame,
+        params: Params,
+        artifacts: Optional[DetectorArtifacts] = None,
+        include_debug_columns: bool = False,
+    ) -> None:
         self._df = df.reset_index(drop=True)
         self._params = params
+        self._artifacts = artifacts
+        self._include_debug_columns = include_debug_columns
         self._result: Optional[pd.DataFrame] = None
 
     def run(self) -> pd.DataFrame:
@@ -97,9 +130,11 @@ class SpeculatorDetector:
         # ---------------------------------------------------------------
 
         # --- SMA/PIR matrices (covers all scales used by both sides) ---
-        sma_matrix, pir_matrix, scales_list = precompute_matrices(
-            close, 2, 500
-        )
+        artifacts = self._artifacts
+        if artifacts is None:
+            artifacts = build_detector_artifacts(df)
+        pir_matrix = artifacts.pir_matrix
+        scales_list = artifacts.scales_list
 
         # --- Per-side agreement fractions (numpy arrays, shape (n,)) ---
         agr_h_high, agr_l_high, _ = calc_agreement_fast(
@@ -252,11 +287,11 @@ class SpeculatorDetector:
             ).fillna(True)
 
         # --- GJR + HAR votes ---
-        gjr_asym_norm, _ = calc_gjr_asym(df)
+        gjr_asym_norm = artifacts.gjr_asym_norm
         gjr_high_vote = gjr_asym_norm <= -p.gjr_vote_thresh_high
         gjr_low_vote = gjr_asym_norm >= p.gjr_vote_thresh_low
 
-        har_vol_norm, _ = calc_har_vol(df)
+        har_vol_norm = artifacts.har_vol_norm
         har_high_vote = har_vol_norm >= p.har_vote_thresh_high
         har_low_vote = har_vol_norm >= p.har_vote_thresh_low
 
@@ -336,10 +371,12 @@ class SpeculatorDetector:
         # Output arrays
         out_signal_high = np.zeros(n, dtype=bool)
         out_signal_low = np.zeros(n, dtype=bool)
-        out_strong_high = np.zeros(n, dtype=bool)
-        out_strong_low = np.zeros(n, dtype=bool)
         out_baseline_ph = np.full(n, np.nan)
         out_baseline_pl = np.full(n, np.nan)
+        out_pivot_drift_high = np.zeros(n, dtype=float)
+        out_pivot_drift_low = np.zeros(n, dtype=float)
+        out_ph_confirms = np.zeros(n, dtype=float)
+        out_pl_confirms = np.zeros(n, dtype=float)
 
         for t in range(n):
             bars_since_high += 1
@@ -371,6 +408,8 @@ class SpeculatorDetector:
                 p.pivot_drift_thresh_high * p.pivot_drift_gate_mult_high
             )
             drift_up_low = drift_low > p.pivot_drift_thresh_low
+            out_pivot_drift_high[t] = drift_high
+            out_pivot_drift_low[t] = drift_low
 
             # --- Duration at extreme ---
             if agr_h_high[t] > p.dur_extreme_pct_high:
@@ -437,6 +476,8 @@ class SpeculatorDetector:
                 p.use_gjr_asym_low and bool(gjr_low_vote_arr[t]),
                 p.use_har_vol_low and bool(har_low_vote_arr[t]),
             ]))
+            out_ph_confirms[t] = ph_c
+            out_pl_confirms[t] = pl_c
 
             # --- Required votes (clamped) ---
             mv_h = max(max_votes_high, 1)
@@ -459,29 +500,14 @@ class SpeculatorDetector:
             ))
 
             # --- Signal generation ---
-            strong_rh = (
-                gate_h
-                and max_votes_high > 0
-                and ph_c >= max_votes_high
-            )
-            strong_rl = (
-                gate_l
-                and max_votes_low > 0
-                and pl_c >= max_votes_low
-            )
-            regular_rh = (
-                gate_h and ph_c >= high_req and not strong_rh
-            )
-            regular_rl = (
-                gate_l and pl_c >= low_req and not strong_rl
-            )
-
             sig_h = (
-                (strong_rh or regular_rh)
+                gate_h
+                and ph_c >= high_req
                 and bars_since_high > p.cooldown_bars_high
             )
             sig_l = (
-                (strong_rl or regular_rl)
+                gate_l
+                and pl_c >= low_req
                 and bars_since_low > p.cooldown_bars_low
             )
 
@@ -492,8 +518,6 @@ class SpeculatorDetector:
 
             out_signal_high[t] = sig_h
             out_signal_low[t] = sig_l
-            out_strong_high[t] = sig_h and strong_rh
-            out_strong_low[t] = sig_l and strong_rl
 
         logger.info(
             "Detection complete: %d high signals, %d low signals",
@@ -501,17 +525,33 @@ class SpeculatorDetector:
             out_signal_low.sum(),
         )
 
-        return pd.DataFrame(
-            {
-                "signal_high": out_signal_high,
-                "signal_low": out_signal_low,
-                "strong_high": out_strong_high,
-                "strong_low": out_strong_low,
-                "baseline_ph": out_baseline_ph,
-                "baseline_pl": out_baseline_pl,
-            },
-            index=df.index,
-        )
+        result = {
+            "signal_high": out_signal_high,
+            "signal_low": out_signal_low,
+            "baseline_ph": out_baseline_ph,
+            "baseline_pl": out_baseline_pl,
+        }
+        if self._include_debug_columns:
+            result.update(
+                {
+                    "agreement_high_side": agr_h_high.astype(float),
+                    "agreement_low_side": agr_l_low.astype(float),
+                    "momentum_velocity_high": mom_vel_high.values.astype(float),
+                    "momentum_velocity_low": mom_vel_low.values.astype(float),
+                    "pivot_drift_high": out_pivot_drift_high,
+                    "pivot_drift_low": out_pivot_drift_low,
+                    "ph_confirms": out_ph_confirms,
+                    "pl_confirms": out_pl_confirms,
+                    "price_gate_high": price_high_ok_arr.astype(float),
+                    "price_gate_low": price_low_ok_arr.astype(float),
+                    "er_val_high": er_val_high.values.astype(float),
+                    "er_val_low": er_val_low.values.astype(float),
+                    "baseline_pivot_high": out_baseline_ph,
+                    "baseline_pivot_low": out_baseline_pl,
+                }
+            )
+
+        return pd.DataFrame(result, index=df.index)
 
     # -------------------------------------------------------------------
     # Helper methods
