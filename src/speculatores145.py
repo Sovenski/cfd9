@@ -11,6 +11,7 @@ import json
 import logging
 import multiprocessing as mp
 import os
+import random
 from dataclasses import dataclass
 from datetime import datetime
 from pathlib import Path
@@ -32,8 +33,10 @@ from .scoring import compute_side_score
 from .validation import (
     FOLD_DEFINITIONS,
     build_optuna_objective,
+    evaluate_params_on_prepared_folds,
     load_cross_asset,
     load_data,
+    prepare_walk_forward_folds,
     temporal_split,
     walk_forward_folds,
 )
@@ -48,6 +51,7 @@ DEFAULT_N_TRIALS = 500
 DEFAULT_STARTUP_TRIALS = 80
 DEFAULT_WORKERS_PER_SIDE = 2
 DEFAULT_SEED = 42
+DEFAULT_STABILITY_TRIALS = 50
 
 TRIAL_STATES_DONE = (
     TrialState.COMPLETE,
@@ -63,6 +67,53 @@ INSTRUMENTS: dict[str, dict[str, Any]] = {
     "WTI": {"path": "data/raw/WTI_1M_20260215_20260312.csv", "resample": True},
     "EURUSD": {"path": "data/raw/EURUSD_1M_20260215_20260312.csv", "resample": True},
     "VIX": {"path": "data/raw/VIX_1M_20241104_20260313.csv", "resample": True},
+}
+
+INT_BOUNDS: dict[str, tuple[int, int]] = {
+    "S_detect": (5, 60),
+    "scale_start": (2, 30),
+    "scale_end": (100, 500),
+    "scale_step": (2, 20),
+    "min_duration": (1, 20),
+    "cooldown_bars": (1, 20),
+    "price_gate_lb": (5, 100),
+    "vola_range_len": (20, 200),
+    "er_period": (5, 60),
+    "confirm_count": (1, 5),
+    "pivot_drift_lookback": (2, 20),
+    "pivot_drift_confirm_bias": (0, 2),
+}
+
+FLOAT_BOUNDS: dict[str, tuple[float, float]] = {
+    "pct_extreme": (0.70, 0.99),
+    "min_agreement": (0.10, 0.90),
+    "dur_extreme_pct": (0.50, 0.99),
+    "vol_surge_thresh": (1.0, 3.0),
+    "scale_div_thresh": (0.10, 0.60),
+    "slope_thresh": (0.01, 0.50),
+    "vola_high_pct": (0.50, 0.99),
+    "pivot_drift_thresh": (0.001, 0.050),
+    "pivot_drift_gate_mult": (1.0, 10.0),
+    "momentum_velocity_thresh": (0.0, 0.05),
+    "gjr_vote_thresh": (0.05, 0.50),
+    "har_vote_thresh": (0.05, 0.50),
+}
+
+BOOL_FIELDS = [
+    "er_directional",
+    "use_trend",
+    "use_volume",
+    "use_momentum",
+    "use_momentum_velocity",
+    "use_volatility",
+    "use_er_gate",
+    "use_gjr_asym",
+    "use_har_vol",
+]
+
+CATEGORY_FIELDS: dict[str, list[str]] = {
+    "vola_method": ["ATR", "StdDev", "Intraday"],
+    "momentum_velocity_mode": ["Trend", "Reversal"],
 }
 
 PINE_HIGH_PARAMS = [
@@ -145,6 +196,7 @@ class RunConfig:
     seed: int = DEFAULT_SEED
     study_prefix: str = VERSION_SLUG
     cross_asset: bool = True
+    stability_trials: int = DEFAULT_STABILITY_TRIALS
 
 
 def configure_process_environment() -> None:
@@ -167,6 +219,30 @@ def _pretty_value(value: Any, digits: int = 3) -> Any:
     if isinstance(value, float):
         return round(value, digits)
     return value
+
+
+def _quantile(values: list[float], q: float) -> float | None:
+    if not values:
+        return None
+    ordered = sorted(values)
+    if len(ordered) == 1:
+        return ordered[0]
+    pos = (len(ordered) - 1) * q
+    lo = int(pos)
+    hi = min(lo + 1, len(ordered) - 1)
+    w = pos - lo
+    return ordered[lo] * (1.0 - w) + ordered[hi] * w
+
+
+def _mean(values: list[float]) -> float:
+    return float(sum(values) / len(values)) if values else 0.0
+
+
+def _std(values: list[float]) -> float:
+    if not values:
+        return 0.0
+    m = _mean(values)
+    return float((sum((v - m) ** 2 for v in values) / len(values)) ** 0.5)
 
 
 def _params_fields(p: Params) -> dict[str, Any]:
@@ -481,6 +557,103 @@ def evaluate_holdout_for_params(
     }
 
 
+def _mutate_local_param(
+    rng: random.Random,
+    value: Any,
+    field_name: str,
+) -> Any:
+    if field_name in INT_BOUNDS:
+        low, high = INT_BOUNDS[field_name]
+        radius = max(1, int(round((high - low) * 0.1)))
+        local_low = max(low, int(value) - radius)
+        local_high = min(high, int(value) + radius)
+        return rng.randint(local_low, local_high)
+    if field_name in FLOAT_BOUNDS:
+        low, high = FLOAT_BOUNDS[field_name]
+        radius = (high - low) * 0.1
+        local_low = max(low, float(value) - radius)
+        local_high = min(high, float(value) + radius)
+        return rng.uniform(local_low, local_high)
+    if field_name in BOOL_FIELDS:
+        return value if rng.random() < 0.85 else (not bool(value))
+    if field_name in CATEGORY_FIELDS:
+        choices = CATEGORY_FIELDS[field_name]
+        if rng.random() < 0.85:
+            return value
+        alternatives = [choice for choice in choices if choice != value]
+        return rng.choice(alternatives) if alternatives else value
+    return value
+
+
+def _sample_local_params(
+    params: Params,
+    side: str,
+    rng: random.Random,
+) -> Params:
+    base_dict = _params_fields(Params())
+    current = _params_fields(params)
+    overrides: dict[str, Any] = {}
+    for field_name in list(INT_BOUNDS) + list(FLOAT_BOUNDS) + BOOL_FIELDS + list(CATEGORY_FIELDS):
+        side_field = f"{field_name}_{side}"
+        overrides[side_field] = _mutate_local_param(rng, current[side_field], field_name)
+    return Params(**{**base_dict, **overrides})
+
+
+def summarize_stability(
+    params: Params,
+    side: str,
+    best_value: float,
+    prepared_folds: list[Any],
+    trials: int,
+    seed: int,
+) -> tuple[dict[str, Any], pd.DataFrame]:
+    rng = random.Random(seed)
+    rows: list[dict[str, Any]] = []
+    scores: list[float] = []
+    for idx in range(trials):
+        sampled = _sample_local_params(params, side, rng)
+        fold_scores = evaluate_params_on_prepared_folds(sampled, side, prepared_folds)
+        score = float(_mean(fold_scores))
+        scores.append(score)
+        rows.append(
+            {
+                "trial": idx + 1,
+                "score": score,
+                "delta_vs_best": score - best_value,
+                "pct_of_best": (score / best_value) if best_value > 0 else 0.0,
+            }
+        )
+
+    mean_score = _mean(scores)
+    if best_value <= 0:
+        share_ge_90 = None
+        mean_ratio = None
+        verdict = "no positive winner"
+    else:
+        share_ge_90 = sum(score >= (0.9 * best_value) for score in scores) / len(scores)
+        mean_ratio = mean_score / best_value
+        if share_ge_90 >= 0.2 and mean_ratio >= 0.6:
+            verdict = "stable basin"
+        elif share_ge_90 >= 0.08 and mean_ratio >= 0.35:
+            verdict = "moderately stable"
+        else:
+            verdict = "likely outlier"
+
+    summary = {
+        "trials": trials,
+        "best_score": round(float(best_value), 6),
+        "local_mean": round(mean_score, 6),
+        "local_p75": round(_quantile(scores, 0.75) or 0.0, 6),
+        "local_std": round(_std(scores), 6),
+        "share_positive": round(sum(score > 0 for score in scores) / len(scores), 3) if scores else 0.0,
+        "share_ge_90pct_best": round(share_ge_90, 3) if share_ge_90 is not None else None,
+        "mean_vs_best": round(mean_ratio, 3) if mean_ratio is not None else None,
+        "max_local": round(max(scores), 6) if scores else 0.0,
+        "verdict": verdict,
+    }
+    return summary, pd.DataFrame(rows)
+
+
 def score_cross_assets(
     params_high: Params,
     params_low: Params,
@@ -622,6 +795,8 @@ def render_report(
     low_folds: pd.DataFrame,
     high_holdout: dict[str, Any],
     low_holdout: dict[str, Any],
+    high_stability: dict[str, Any],
+    low_stability: dict[str, Any],
     cross_asset_df: pd.DataFrame,
     pine_block: str,
     parity_df: pd.DataFrame,
@@ -649,6 +824,7 @@ def render_report(
         f"- Storage: `{config.storage_path}`",
         f"- Trials per side target: `{config.trials_per_side}`",
         f"- Workers per side: `{config.workers_per_side}`",
+        f"- Stability probe trials per side: `{config.stability_trials}`",
         f"- Bars in primary dataset: `{len(df_primary)}`",
         "",
         "## Cell 2 — Data",
@@ -720,6 +896,22 @@ def render_report(
         json.dumps(low_holdout, indent=2),
         "```",
         "",
+        "## Cell 5.4 — Local Stability Probe",
+        "",
+        "Neighborhood probe around each side's best params using the same walk-forward objective.",
+        "",
+        "### HIGH",
+        "",
+        "```json",
+        json.dumps(high_stability, indent=2),
+        "```",
+        "",
+        "### LOW",
+        "",
+        "```json",
+        json.dumps(low_stability, indent=2),
+        "```",
+        "",
         "## Cell 6 — Cross-Asset Generalization",
         "",
         _df_to_markdown(cross_asset_df),
@@ -767,10 +959,27 @@ def run_full_pipeline(config: RunConfig) -> Path:
     study_low = studies["low"]
     params_high = params_from_trial(study_high.best_trial, "high")
     params_low = params_from_trial(study_low.best_trial, "low")
+    prepared_folds = prepare_walk_forward_folds(df_primary)
     high_folds = evaluate_folds_for_params(df_primary, params_high, "high")
     low_folds = evaluate_folds_for_params(df_primary, params_low, "low")
     high_holdout = evaluate_holdout_for_params(df_primary, params_high, "high")
     low_holdout = evaluate_holdout_for_params(df_primary, params_low, "low")
+    high_stability, _ = summarize_stability(
+        params_high,
+        "high",
+        float(study_high.best_trial.value),
+        prepared_folds,
+        config.stability_trials,
+        config.seed + 10_001,
+    )
+    low_stability, _ = summarize_stability(
+        params_low,
+        "low",
+        float(study_low.best_trial.value),
+        prepared_folds,
+        config.stability_trials,
+        config.seed + 20_001,
+    )
     cross_asset_df = (
         score_cross_assets(params_high, params_low) if config.cross_asset else pd.DataFrame()
     )
@@ -791,6 +1000,8 @@ def run_full_pipeline(config: RunConfig) -> Path:
         low_folds=low_folds,
         high_holdout=high_holdout,
         low_holdout=low_holdout,
+        high_stability=high_stability,
+        low_stability=low_stability,
         cross_asset_df=cross_asset_df,
         pine_block=pine_block,
         parity_df=parity_df,

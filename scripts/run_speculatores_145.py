@@ -23,6 +23,7 @@ from src.speculatores145 import (
     DEFAULT_N_TRIALS,
     DEFAULT_RESULTS_DIR,
     DEFAULT_STARTUP_TRIALS,
+    DEFAULT_STABILITY_TRIALS,
     DEFAULT_STORAGE_FILE,
     DEFAULT_WORKERS_PER_SIDE,
     RunConfig,
@@ -72,6 +73,12 @@ def parse_args() -> argparse.Namespace:
         help="Base random seed for samplers.",
     )
     parser.add_argument(
+        "--stability-trials",
+        type=int,
+        default=DEFAULT_STABILITY_TRIALS,
+        help="Local neighborhood trials per side to test best-param stability.",
+    )
+    parser.add_argument(
         "--study-prefix",
         default="speculatores_14_5",
         help="Study-name prefix used in Optuna storage.",
@@ -96,6 +103,7 @@ def main() -> None:
         seed=args.seed,
         study_prefix=args.study_prefix,
         cross_asset=not args.skip_cross_asset,
+        stability_trials=args.stability_trials,
     )
     report_path = run_full_pipeline(config)
     print(f"Speculatores 14.5 report written to: {report_path}")

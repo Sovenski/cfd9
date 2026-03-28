@@ -25,6 +25,7 @@ from .scoring import add_pivot_labels, fold_score_high, fold_score_low
 logger = logging.getLogger(__name__)
 
 MIN_SIGNALS_PER_FOLD: int = 6
+PreparedFold = tuple[pd.DataFrame, pd.DataFrame, DetectorArtifacts, DetectorArtifacts]
 
 # ---------------------------------------------------------------------------
 # Walk-forward fold definitions
@@ -248,9 +249,29 @@ def build_optuna_objective(
             "Ensure df_full covers 1983-2008."
         )
 
-    prepared_folds: list[
-        tuple[pd.DataFrame, pd.DataFrame, DetectorArtifacts, DetectorArtifacts]
-    ] = []
+    prepared_folds = prepare_walk_forward_folds(df_full, folds)
+
+    def objective(trial: optuna.Trial) -> float:
+        params = params_from_trial(trial, side)
+
+        fold_scores: list[float] = []
+        for fold_idx, score in enumerate(evaluate_params_on_prepared_folds(params, side, prepared_folds)):
+            fold_scores.append(score)
+            trial.report(float(np.mean(fold_scores)), fold_idx)
+            if trial.should_prune():
+                raise optuna.exceptions.TrialPruned()
+
+        return float(np.mean(fold_scores))
+
+    return objective
+
+
+def prepare_walk_forward_folds(
+    df_full: pd.DataFrame,
+    folds: list[tuple[pd.DataFrame, pd.DataFrame]] | None = None,
+) -> list[PreparedFold]:
+    folds = folds or walk_forward_folds(df_full)
+    prepared_folds: list[PreparedFold] = []
     for fold_idx, (df_is, df_oos) in enumerate(folds):
         df_is_r = df_is.reset_index(drop=True)
         df_oos_r = df_oos.reset_index(drop=True)
@@ -265,44 +286,38 @@ def build_optuna_objective(
         artifacts_is = build_detector_artifacts(df_is_r)
         artifacts_oos = build_detector_artifacts(df_oos_r)
         prepared_folds.append((df_is_r, df_oos_r, artifacts_is, artifacts_oos))
+    return prepared_folds
 
-    def objective(trial: optuna.Trial) -> float:
-        params = params_from_trial(trial, side)
 
-        fold_scores: list[float] = []
-        for fold_idx, (df_is_r, df_oos_r, artifacts_is, artifacts_oos) in enumerate(prepared_folds):
-            det_is = SpeculatorDetector(df_is_r, params, artifacts_is).run()
-            det_oos = SpeculatorDetector(df_oos_r, params, artifacts_oos).run()
+def evaluate_params_on_prepared_folds(
+    params: Params,
+    side: str,
+    prepared_folds: list[PreparedFold],
+) -> list[float]:
+    fold_scores: list[float] = []
+    for df_is_r, df_oos_r, artifacts_is, artifacts_oos in prepared_folds:
+        det_is = SpeculatorDetector(df_is_r, params, artifacts_is).run()
+        det_oos = SpeculatorDetector(df_oos_r, params, artifacts_oos).run()
 
-            sig_high_is = det_is["signal_high"]
-            sig_low_is = det_is["signal_low"]
-            sig_high_oos = det_oos["signal_high"]
-            sig_low_oos = det_oos["signal_low"]
+        sig_high_is = det_is["signal_high"]
+        sig_low_is = det_is["signal_low"]
+        sig_high_oos = det_oos["signal_high"]
+        sig_low_oos = det_oos["signal_low"]
 
-            if side == "high":
-                score = fold_score_high(df_is_r, df_oos_r, sig_high_is, sig_high_oos)
-                n_is_signals = int(sig_high_is.sum())
-                n_oos_signals = int(sig_high_oos.sum())
-            else:
-                score = fold_score_low(df_is_r, df_oos_r, sig_low_is, sig_low_oos)
-                n_is_signals = int(sig_low_is.sum())
-                n_oos_signals = int(sig_low_oos.sum())
+        if side == "high":
+            score = fold_score_high(df_is_r, df_oos_r, sig_high_is, sig_high_oos)
+            n_is_signals = int(sig_high_is.sum())
+            n_oos_signals = int(sig_high_oos.sum())
+        else:
+            score = fold_score_low(df_is_r, df_oos_r, sig_low_is, sig_low_oos)
+            n_is_signals = int(sig_low_is.sum())
+            n_oos_signals = int(sig_low_oos.sum())
 
-            support_factor = min(1.0, n_is_signals / MIN_SIGNALS_PER_FOLD) * min(
-                1.0, n_oos_signals / MIN_SIGNALS_PER_FOLD
-            )
-            score *= support_factor
-
-            fold_scores.append(score)
-
-            # Report intermediate cumulative mean for pruning
-            trial.report(float(np.mean(fold_scores)), fold_idx)
-            if trial.should_prune():
-                raise optuna.exceptions.TrialPruned()
-
-        return float(np.mean(fold_scores))
-
-    return objective
+        support_factor = min(1.0, n_is_signals / MIN_SIGNALS_PER_FOLD) * min(
+            1.0, n_oos_signals / MIN_SIGNALS_PER_FOLD
+        )
+        fold_scores.append(score * support_factor)
+    return fold_scores
 
 
 # ---------------------------------------------------------------------------

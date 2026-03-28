@@ -23,7 +23,7 @@ class StudyProgress:
     total_done: int
     target: int
     best_value: float | None
-    median_value: float | None
+    p75_value: float | None
 
 
 @dataclass(frozen=True)
@@ -45,14 +45,17 @@ def make_storage(storage_path: str | Path) -> JournalStorage:
     return JournalStorage(JournalFileBackend(str(storage_path), lock_obj=lock_obj))
 
 
-def _median(values: list[float]) -> float | None:
+def _percentile(values: list[float], q: float) -> float | None:
     if not values:
         return None
     values = sorted(values)
-    mid = len(values) // 2
-    if len(values) % 2 == 1:
-        return values[mid]
-    return (values[mid - 1] + values[mid]) / 2.0
+    if len(values) == 1:
+        return values[0]
+    pos = (len(values) - 1) * q
+    low = int(pos)
+    high = min(low + 1, len(values) - 1)
+    weight = pos - low
+    return values[low] * (1.0 - weight) + values[high] * weight
 
 
 def summarize_study(
@@ -78,7 +81,7 @@ def summarize_study(
         total_done=len(complete_trials) + len(pruned_trials) + len(failed_trials),
         target=target,
         best_value=(max(values) if values else None),
-        median_value=_median(values),
+        p75_value=_percentile(values, 0.75),
     )
 
 
@@ -124,5 +127,5 @@ def progress_dict(progress: StudyProgress | RunProgress) -> dict[str, Any]:
         "total_done": progress.total_done,
         "target": progress.target,
         "best_value": progress.best_value,
-        "median_value": progress.median_value,
+        "p75_value": progress.p75_value,
     }

@@ -40,7 +40,7 @@ for _ in range(10_000):
         print('')
         for side, study in (('HIGH', summary.high), ('LOW', summary.low)):
             info = progress_dict(study)
-            print(f"{side}: best={info['best_value']} median={info['median_value']}")
+            print(f"{side}: best={info['best_value']} p75={info['p75_value']}")
     except Exception as exc:
         print(f'Progress unavailable yet: {exc}')
         print('')
