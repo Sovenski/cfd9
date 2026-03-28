@@ -5,9 +5,9 @@ from IPython.display import clear_output
 from src.monitor145 import summarize_run, progress_dict
 
 DRIVE_ROOT = globals().get("DRIVE_ROOT", Path("/content/drive/MyDrive/cfd9"))
-STORAGE = globals().get("STORAGE", DRIVE_ROOT / "spec145_spx.journal")
-LOG_PATH = globals().get("LOG_PATH", DRIVE_ROOT / "spec145_spx.log")
-PID_PATH = globals().get("PID_PATH", DRIVE_ROOT / "spec145_spx.pid")
+STORAGE = globals().get("STORAGE", DRIVE_ROOT / "runs/spec145_default/spec145.journal")
+LOG_PATH = globals().get("LOG_PATH", DRIVE_ROOT / "runs/spec145_default/spec145.log")
+PID_PATH = globals().get("PID_PATH", DRIVE_ROOT / "runs/spec145_default/spec145.pid")
 STUDY_PREFIX = globals().get("STUDY_PREFIX", "speculatores_14_5")
 
 
