@@ -112,5 +112,4 @@ assert reports, 'No reports found.'
 
 latest_report = reports[0]
 print(f'Latest report: {latest_report}')
-lines = latest_report.read_text(encoding='utf-8').splitlines()
-print('\n'.join(lines[:220]))
+print(latest_report.read_text(encoding='utf-8'))

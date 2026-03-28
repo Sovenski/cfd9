@@ -163,7 +163,7 @@ def params_to_dict(params: Params) -> dict[str, Any]:
     return {field.name: getattr(params, field.name) for field in dataclasses.fields(params)}
 
 
-def _pretty_value(value: Any, digits: int = 4) -> Any:
+def _pretty_value(value: Any, digits: int = 3) -> Any:
     if isinstance(value, float):
         return round(value, digits)
     return value
@@ -592,7 +592,9 @@ def study_summary(study: optuna.Study) -> dict[str, Any]:
 def _df_to_markdown(df: pd.DataFrame) -> str:
     if df.empty:
         return "_empty_"
-    render_df = df.fillna("").astype(str)
+    render_df = df.copy()
+    render_df = render_df.map(_pretty_value)
+    render_df = render_df.fillna("").astype(str)
     headers = list(render_df.columns)
     rows = render_df.values.tolist()
     widths = [len(str(header)) for header in headers]
