@@ -24,11 +24,11 @@ top-level code and storage that tolerates concurrent workers.
 
 ```powershell
 python scripts/run_speculatores_145.py `
-  --dataset data/raw/SPX_1D_18710201_20260318.csv `
+  --dataset /content/drive/MyDrive/cfd9/data/raw/SPX_1D_18710201_20260318.csv `
   --trials-per-side 500 `
   --workers-per-side 2 `
-  --storage temp/speculatores_14_5.journal `
-  --results-dir results
+  --storage /content/drive/MyDrive/cfd9/speculatores_14_5.journal `
+  --results-dir /content/drive/MyDrive/cfd9/results
 ```
 
 ## Colab notes
@@ -36,3 +36,4 @@ python scripts/run_speculatores_145.py `
 - Prefer CPU runtimes. This workload is pandas/numpy + Python loops, not GPU-heavy.
 - Keep `workers-per-side` modest. `2` is a reasonable starting point.
 - Use a Drive-backed storage/report path if you need resume-safe runs.
+- Keep the primary dataset on Drive too; raw market CSVs are not assumed to live in the Git repo.
