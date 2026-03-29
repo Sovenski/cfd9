@@ -22,6 +22,7 @@ from .indicators import (
     calc_gjr_asym,
     calc_har_vol,
     calc_pivot_drift,
+    linreg_slope_step,
     linreg_value,
     nz,
     pir_of,
@@ -177,9 +178,9 @@ class SpeculatorDetector:
             / (slope_delta_high * sma_val_high.clip(lower=1e-9))
             * 1000
         )
-        linreg_val_high = linreg_value(close, p.S_detect_high)
+        linreg_slope_high = linreg_slope_step(close, p.S_detect_high)
         linreg_norm_high = (
-            linreg_val_high.diff() / sma_val_high.clip(lower=1e-9) * 1000
+            linreg_slope_high / sma_val_high.clip(lower=1e-9) * 1000
         )
         trend_up_high = (slope_val_high > p.slope_thresh_high) & (
             linreg_norm_high > p.slope_thresh_high
@@ -193,9 +194,9 @@ class SpeculatorDetector:
             / (slope_delta_low * sma_val_low.clip(lower=1e-9))
             * 1000
         )
-        linreg_val_low = linreg_value(close, p.S_detect_low)
+        linreg_slope_low = linreg_slope_step(close, p.S_detect_low)
         linreg_norm_low = (
-            linreg_val_low.diff() / sma_val_low.clip(lower=1e-9) * 1000
+            linreg_slope_low / sma_val_low.clip(lower=1e-9) * 1000
         )
         trend_down_low = (slope_val_low < -p.slope_thresh_low) & (
             linreg_norm_low < -p.slope_thresh_low
@@ -300,13 +301,11 @@ class SpeculatorDetector:
             high.rolling(p.price_gate_lb_high)
             .max()
             .shift(1)
-            .fillna(-np.inf)
         )
         price_low_ok = low <= (
             low.rolling(p.price_gate_lb_low)
             .min()
             .shift(1)
-            .fillna(np.inf)
         )
 
         # --- Baseline pivot series (non-causal, used with offset) ---
@@ -384,7 +383,7 @@ class SpeculatorDetector:
 
             # --- Baseline pivots (causal: bar t-baseline_lb is now known) ---
             pivot_bar = t - p.baseline_lb
-            if pivot_bar >= p.baseline_lb:  # t >= 2*baseline_lb
+            if pivot_bar >= 0:
                 if ph_arr[pivot_bar]:
                     out_baseline_ph[t] = high_arr[pivot_bar]
                     confirmed_pivots.append(high_arr[pivot_bar])

@@ -207,6 +207,22 @@ def linreg_value(series: pd.Series, length: int) -> pd.Series:
     return series.rolling(length).apply(_linreg_val, raw=True)
 
 
+def linreg_slope_step(series: pd.Series, length: int) -> pd.Series:
+    """Pine ``ta.linreg(series, length, 0) - ta.linreg(series, length, 1)``.
+
+    This is the fitted one-step slope from the current rolling regression
+    window, not the difference between endpoint values from consecutive
+    windows.
+    """
+
+    def _linreg_step(w: np.ndarray) -> float:
+        x = np.arange(len(w))
+        coeffs = np.polyfit(x, w, 1)
+        return coeffs[0]
+
+    return series.rolling(length).apply(_linreg_step, raw=True)
+
+
 # ---------------------------------------------------------------------------
 # Agreement calculation (slow path — without precomputed matrices)
 # ---------------------------------------------------------------------------
