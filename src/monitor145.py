@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from pathlib import Path
+import time
 from typing import Any
 
 import optuna
@@ -64,8 +65,22 @@ def summarize_study(
     side: str,
     target: int,
 ) -> StudyProgress:
-    storage = make_storage(storage_path)
-    study = optuna.load_study(study_name=study_name, storage=storage)
+    last_error: Exception | None = None
+    for _ in range(5):
+        try:
+            storage = make_storage(storage_path)
+            study = optuna.load_study(study_name=study_name, storage=storage)
+            break
+        except ValueError as exc:
+            # Journal readers can occasionally observe a partially appended line
+            # while workers are writing. A short retry smooths that over.
+            last_error = exc
+            if "Extra data" not in str(exc):
+                raise
+            time.sleep(0.25)
+    else:
+        assert last_error is not None
+        raise last_error
     complete_trials = [t for t in study.trials if t.state == TrialState.COMPLETE]
     pruned_trials = [t for t in study.trials if t.state == TrialState.PRUNED]
     failed_trials = [t for t in study.trials if t.state == TrialState.FAIL]
