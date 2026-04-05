@@ -248,6 +248,57 @@ if is_spx_20260329_1835_trial1225 or is_spx_20260405_parity_highlow
     n_scales_low := 26
     agreement_low_low := spx_low_count_sum / 26.0
 
+if is_spx_20260405_parity_highlow
+    float spx_high_count_sum =
+         high_scale_flag(24, pct_extreme_high) +
+         high_scale_flag(27, pct_extreme_high) +
+         high_scale_flag(30, pct_extreme_high) +
+         high_scale_flag(33, pct_extreme_high) +
+         high_scale_flag(36, pct_extreme_high) +
+         high_scale_flag(39, pct_extreme_high) +
+         high_scale_flag(42, pct_extreme_high) +
+         high_scale_flag(45, pct_extreme_high) +
+         high_scale_flag(48, pct_extreme_high) +
+         high_scale_flag(51, pct_extreme_high) +
+         high_scale_flag(54, pct_extreme_high) +
+         high_scale_flag(57, pct_extreme_high) +
+         high_scale_flag(60, pct_extreme_high) +
+         high_scale_flag(63, pct_extreme_high) +
+         high_scale_flag(66, pct_extreme_high) +
+         high_scale_flag(69, pct_extreme_high) +
+         high_scale_flag(72, pct_extreme_high) +
+         high_scale_flag(75, pct_extreme_high) +
+         high_scale_flag(78, pct_extreme_high) +
+         high_scale_flag(81, pct_extreme_high) +
+         high_scale_flag(84, pct_extreme_high) +
+         high_scale_flag(87, pct_extreme_high) +
+         high_scale_flag(90, pct_extreme_high) +
+         high_scale_flag(93, pct_extreme_high) +
+         high_scale_flag(96, pct_extreme_high) +
+         high_scale_flag(99, pct_extreme_high) +
+         high_scale_flag(102, pct_extreme_high) +
+         high_scale_flag(105, pct_extreme_high) +
+         high_scale_flag(108, pct_extreme_high) +
+         high_scale_flag(111, pct_extreme_high) +
+         high_scale_flag(114, pct_extreme_high) +
+         high_scale_flag(117, pct_extreme_high) +
+         high_scale_flag(120, pct_extreme_high) +
+         high_scale_flag(123, pct_extreme_high) +
+         high_scale_flag(126, pct_extreme_high) +
+         high_scale_flag(129, pct_extreme_high) +
+         high_scale_flag(132, pct_extreme_high) +
+         high_scale_flag(135, pct_extreme_high) +
+         high_scale_flag(138, pct_extreme_high) +
+         high_scale_flag(141, pct_extreme_high) +
+         high_scale_flag(144, pct_extreme_high) +
+         high_scale_flag(147, pct_extreme_high) +
+         high_scale_flag(150, pct_extreme_high) +
+         high_scale_flag(153, pct_extreme_high) +
+         high_scale_flag(156, pct_extreme_high)
+    scales_high_high := int(spx_high_count_sum)
+    n_scales_high := 45
+    agreement_high_high := spx_high_count_sum / 45.0
+
 bool ms_agree_high = agreement_high_high >= min_agreement_high
 bool ms_agree_low = agreement_low_low >= min_agreement_low
 
