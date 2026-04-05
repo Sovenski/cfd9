@@ -384,14 +384,16 @@ class SpeculatorDetector:
             bars_since_low += 1
 
             # --- Baseline pivots (causal: bar t-baseline_lb is now known) ---
+            current_baseline_ph = np.nan
+            current_baseline_pl = np.nan
             pivot_bar = t - p.baseline_lb
             if pivot_bar >= 0:
                 if ph_arr[pivot_bar]:
-                    out_baseline_ph[t] = high_arr[pivot_bar]
-                    confirmed_pivots.append(high_arr[pivot_bar])
+                    current_baseline_ph = high_arr[pivot_bar]
+                    out_baseline_ph[t] = current_baseline_ph
                 if pl_arr[pivot_bar]:
-                    out_baseline_pl[t] = low_arr[pivot_bar]
-                    confirmed_pivots.append(low_arr[pivot_bar])
+                    current_baseline_pl = low_arr[pivot_bar]
+                    out_baseline_pl[t] = current_baseline_pl
 
             # --- Pivot drift ---
             drift_high = calc_pivot_drift(
@@ -411,6 +413,12 @@ class SpeculatorDetector:
             drift_up_low = drift_low > p.pivot_drift_thresh_low
             out_pivot_drift_high[t] = drift_high
             out_pivot_drift_low[t] = drift_low
+
+            # Pine updates the confirmed pivot stack after evaluating drift.
+            if not np.isnan(current_baseline_ph):
+                confirmed_pivots.append(current_baseline_ph)
+            if not np.isnan(current_baseline_pl):
+                confirmed_pivots.append(current_baseline_pl)
 
             # --- Duration at extreme ---
             if agr_h_high[t] > p.dur_extreme_pct_high:
