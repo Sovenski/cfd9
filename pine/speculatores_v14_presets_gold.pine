@@ -43,6 +43,13 @@ calc_agreement(int scale_start, int scale_end, int scale_step, float pct_extreme
     float n_scales_f = math.max(n_scales, 1)
     [scales_high, scales_low, n_scales, scales_high / n_scales_f, scales_low / n_scales_f]
 
+low_scale_flag(int s, float pct_extreme) =>
+    float sma_s = ta.sma(close, s)
+    float ratio_s = sma_s > 0 ? close / sma_s : 1.0
+    int lb = math.max(s, 20)
+    float pir_s = pir_of(ratio_s, lb)
+    pir_s < (1.0 - pct_extreme) ? 1.0 : 0.0
+
 calc_pivot_drift(array<float> pivots, int lookback) =>
     float out = na
     int min_pivots = math.max(lookback, 2)
@@ -428,6 +435,32 @@ plot(bars_since_high_signal * 1.0, "dbg_bars_since_high_signal", display=display
 plot(bars_since_low_signal * 1.0, "dbg_bars_since_low_signal", display=display.data_window)
 plot(pivot_high ? 1.0 : 0.0, "dbg_pivot_high_raw", display=display.data_window)
 plot(pivot_low ? 1.0 : 0.0, "dbg_pivot_low_raw", display=display.data_window)
+plot(low_scale_flag(17, pct_extreme_low), "dbg_low_flag_s17", display=display.data_window)
+plot(low_scale_flag(24, pct_extreme_low), "dbg_low_flag_s24", display=display.data_window)
+plot(low_scale_flag(31, pct_extreme_low), "dbg_low_flag_s31", display=display.data_window)
+plot(low_scale_flag(38, pct_extreme_low), "dbg_low_flag_s38", display=display.data_window)
+plot(low_scale_flag(45, pct_extreme_low), "dbg_low_flag_s45", display=display.data_window)
+plot(low_scale_flag(52, pct_extreme_low), "dbg_low_flag_s52", display=display.data_window)
+plot(low_scale_flag(59, pct_extreme_low), "dbg_low_flag_s59", display=display.data_window)
+plot(low_scale_flag(66, pct_extreme_low), "dbg_low_flag_s66", display=display.data_window)
+plot(low_scale_flag(73, pct_extreme_low), "dbg_low_flag_s73", display=display.data_window)
+plot(low_scale_flag(80, pct_extreme_low), "dbg_low_flag_s80", display=display.data_window)
+plot(low_scale_flag(87, pct_extreme_low), "dbg_low_flag_s87", display=display.data_window)
+plot(low_scale_flag(94, pct_extreme_low), "dbg_low_flag_s94", display=display.data_window)
+plot(low_scale_flag(101, pct_extreme_low), "dbg_low_flag_s101", display=display.data_window)
+plot(low_scale_flag(108, pct_extreme_low), "dbg_low_flag_s108", display=display.data_window)
+plot(low_scale_flag(115, pct_extreme_low), "dbg_low_flag_s115", display=display.data_window)
+plot(low_scale_flag(122, pct_extreme_low), "dbg_low_flag_s122", display=display.data_window)
+plot(low_scale_flag(129, pct_extreme_low), "dbg_low_flag_s129", display=display.data_window)
+plot(low_scale_flag(136, pct_extreme_low), "dbg_low_flag_s136", display=display.data_window)
+plot(low_scale_flag(143, pct_extreme_low), "dbg_low_flag_s143", display=display.data_window)
+plot(low_scale_flag(150, pct_extreme_low), "dbg_low_flag_s150", display=display.data_window)
+plot(low_scale_flag(157, pct_extreme_low), "dbg_low_flag_s157", display=display.data_window)
+plot(low_scale_flag(164, pct_extreme_low), "dbg_low_flag_s164", display=display.data_window)
+plot(low_scale_flag(171, pct_extreme_low), "dbg_low_flag_s171", display=display.data_window)
+plot(low_scale_flag(178, pct_extreme_low), "dbg_low_flag_s178", display=display.data_window)
+plot(low_scale_flag(185, pct_extreme_low), "dbg_low_flag_s185", display=display.data_window)
+plot(low_scale_flag(192, pct_extreme_low), "dbg_low_flag_s192", display=display.data_window)
 plot(price_high_ok ? 1.0 : 0.0, "price_gate_high", display=display.data_window)
 plot(price_low_ok ? 1.0 : 0.0, "price_gate_low", display=display.data_window)
 plot(er_val_high, "er_val_high", display=display.data_window)
