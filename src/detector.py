@@ -204,14 +204,16 @@ class SpeculatorDetector:
 
         # --- Volume surge ---
         vol_fast_len_high = max(round(p.S_detect_high / 4), 2)
+        vol_slow_high = sma(volume, p.S_detect_high)
         vol_surge_high = (
             sma(volume, vol_fast_len_high)
-            / sma(volume, p.S_detect_high).clip(lower=1e-10)
+            / vol_slow_high.where(vol_slow_high != 0)
         )
         vol_fast_len_low = max(round(p.S_detect_low / 4), 2)
+        vol_slow_low = sma(volume, p.S_detect_low)
         vol_surge_low = (
             sma(volume, vol_fast_len_low)
-            / sma(volume, p.S_detect_low).clip(lower=1e-10)
+            / vol_slow_low.where(vol_slow_low != 0)
         )
 
         # --- Momentum ---
