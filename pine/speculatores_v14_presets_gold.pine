@@ -204,6 +204,38 @@ int vola_slope_lb_low = math.max(math.round(S_detect_low / 2), 2)
 [scales_high_high, scales_low_high, n_scales_high, agreement_high_high, agreement_low_high] = calc_agreement(scale_start_high, scale_end_high, scale_step_high, pct_extreme_high)
 [scales_high_low, scales_low_low, n_scales_low, agreement_high_low, agreement_low_low] = calc_agreement(scale_start_low, scale_end_low, scale_step_low, pct_extreme_low)
 
+if is_spx_20260329_1835_trial1225
+    float spx_low_count_sum =
+         low_scale_flag(17, pct_extreme_low) +
+         low_scale_flag(24, pct_extreme_low) +
+         low_scale_flag(31, pct_extreme_low) +
+         low_scale_flag(38, pct_extreme_low) +
+         low_scale_flag(45, pct_extreme_low) +
+         low_scale_flag(52, pct_extreme_low) +
+         low_scale_flag(59, pct_extreme_low) +
+         low_scale_flag(66, pct_extreme_low) +
+         low_scale_flag(73, pct_extreme_low) +
+         low_scale_flag(80, pct_extreme_low) +
+         low_scale_flag(87, pct_extreme_low) +
+         low_scale_flag(94, pct_extreme_low) +
+         low_scale_flag(101, pct_extreme_low) +
+         low_scale_flag(108, pct_extreme_low) +
+         low_scale_flag(115, pct_extreme_low) +
+         low_scale_flag(122, pct_extreme_low) +
+         low_scale_flag(129, pct_extreme_low) +
+         low_scale_flag(136, pct_extreme_low) +
+         low_scale_flag(143, pct_extreme_low) +
+         low_scale_flag(150, pct_extreme_low) +
+         low_scale_flag(157, pct_extreme_low) +
+         low_scale_flag(164, pct_extreme_low) +
+         low_scale_flag(171, pct_extreme_low) +
+         low_scale_flag(178, pct_extreme_low) +
+         low_scale_flag(185, pct_extreme_low) +
+         low_scale_flag(192, pct_extreme_low)
+    scales_low_low := int(spx_low_count_sum)
+    n_scales_low := 26
+    agreement_low_low := spx_low_count_sum / 26.0
+
 bool ms_agree_high = agreement_high_high >= min_agreement_high
 bool ms_agree_low = agreement_low_low >= min_agreement_low
 
