@@ -20,7 +20,6 @@ from .validation import (
     ValidationScheme,
     infer_validation_scheme,
     describe_validation_scheme,
-    FOLD_DEFINITIONS,
     EMBARGO_BARS,
     MIN_SIGNALS_PER_FOLD,
 )
@@ -46,7 +45,6 @@ __all__ = [
     "ValidationScheme",
     "infer_validation_scheme",
     "describe_validation_scheme",
-    "FOLD_DEFINITIONS",
     "EMBARGO_BARS",
     "MIN_SIGNALS_PER_FOLD",
     "RunConfig",

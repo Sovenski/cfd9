@@ -24,35 +24,32 @@ from .scoring import add_pivot_labels, fold_score_high, fold_score_low
 logger = logging.getLogger(__name__)
 
 MIN_SIGNALS_PER_FOLD: int = 1
-DEFAULT_HOLDOUT_FRACTION: float = 0.2
-DEFAULT_N_FOLDS: int = 5
 MIN_TRAIN_BARS: int = 252
 MIN_TEST_BARS: int = 63
 EMBARGO_BARS: int = 20
 
-PreparedFold = tuple[pd.DataFrame, pd.DataFrame, DetectorArtifacts, DetectorArtifacts]
+# Bar-based fold scheme (timeframe-agnostic).
+# All sizes are expressed as fractions of the full dataset length so the same
+# scheme works on daily, hourly, or minute data without retuning.
+DEFAULT_HOLDOUT_FRACTION: float = 0.20  # Last 20% of data reserved for holdout
+DEFAULT_IS_FRACTION: float = 0.10       # In-sample slice per fold (10% of full)
+DEFAULT_OOS_FRACTION: float = 0.03      # Out-of-sample slice per fold (3% of full)
+DEFAULT_STEP_FRACTION: float = 0.05     # Step between fold starts (5% of full)
 
-# Preserved for backwards compatibility and legacy long-history validation.
-LEGACY_FOLD_DEFINITIONS: list[tuple[str, str, str, str]] = [
-    ("1983-01-01", "1993-01-01", "1993-01-01", "1996-01-01"),
-    ("1986-01-01", "1996-01-01", "1996-01-01", "1999-01-01"),
-    ("1989-01-01", "1999-01-01", "1999-01-01", "2002-01-01"),
-    ("1992-01-01", "2002-01-01", "2002-01-01", "2005-01-01"),
-    ("1995-01-01", "2005-01-01", "2005-01-01", "2008-01-01"),
-]
-FOLD_DEFINITIONS = LEGACY_FOLD_DEFINITIONS
+PreparedFold = tuple[pd.DataFrame, pd.DataFrame, DetectorArtifacts, DetectorArtifacts]
 
 
 @dataclasses.dataclass(frozen=True)
 class ValidationScheme:
-    mode: str
-    holdout_mode: str
-    holdout_cutoff: pd.Timestamp | None
-    holdout_fraction: float
-    n_folds: int
+    is_bars: int
+    oos_bars: int
+    step_bars: int
     embargo_bars: int
-    min_train_bars: int
-    min_test_bars: int
+    holdout_bars: int
+    n_bars_active: int  # = total bars - holdout_bars
+    # Retained for backward compatibility with consumers that inspect these.
+    min_train_bars: int = MIN_TRAIN_BARS
+    min_test_bars: int = MIN_TEST_BARS
 
 
 def _get_time_series(df: pd.DataFrame) -> pd.Series:
@@ -63,46 +60,40 @@ def _get_time_series(df: pd.DataFrame) -> pd.Series:
 
 
 def infer_validation_scheme(df: pd.DataFrame) -> ValidationScheme:
-    """Choose a validation scheme that fits the dataset span and size."""
-    if len(df) <= (MIN_TRAIN_BARS + MIN_TEST_BARS + EMBARGO_BARS):
+    """Compute bar-based fold sizes from dataset length.
+
+    All sizes scale with dataset length so the same scheme works on daily,
+    hourly, or minute data. The last `DEFAULT_HOLDOUT_FRACTION` bars are
+    reserved for the holdout split; folds are generated from the remaining
+    "active" range using sliding IS/OOS windows.
+    """
+    n = len(df)
+    if n <= (MIN_TRAIN_BARS + MIN_TEST_BARS + EMBARGO_BARS):
         raise ValueError(
-            f"Dataset has {len(df)} bars, which is too small for validation "
+            f"Dataset has {n} bars, which is too small for validation "
             f"(needs more than {MIN_TRAIN_BARS + MIN_TEST_BARS + EMBARGO_BARS})."
         )
 
-    time_series = _get_time_series(df)
-    first_ts = pd.Timestamp(time_series.iloc[0])
-    last_ts = pd.Timestamp(time_series.iloc[-1])
-    has_legacy_span = (
-        first_ts <= pd.Timestamp("1983-01-01")
-        and last_ts >= pd.Timestamp("2008-01-01")
-    )
-    has_legacy_holdout = (
-        first_ts < pd.Timestamp("2010-01-01")
-        and last_ts >= pd.Timestamp("2010-01-01")
-    )
+    holdout_bars = max(MIN_TEST_BARS, int(round(n * DEFAULT_HOLDOUT_FRACTION)))
+    n_active = n - holdout_bars
+    is_bars = max(MIN_TRAIN_BARS, int(round(n * DEFAULT_IS_FRACTION)))
+    oos_bars = max(MIN_TEST_BARS, int(round(n * DEFAULT_OOS_FRACTION)))
+    step_bars = max(MIN_TEST_BARS, int(round(n * DEFAULT_STEP_FRACTION)))
 
-    if has_legacy_span:
-        return ValidationScheme(
-            mode="legacy_dates",
-            holdout_mode="date_cutoff" if has_legacy_holdout else "last_fraction",
-            holdout_cutoff=pd.Timestamp("2010-01-01") if has_legacy_holdout else None,
-            holdout_fraction=DEFAULT_HOLDOUT_FRACTION,
-            n_folds=len(LEGACY_FOLD_DEFINITIONS),
-            embargo_bars=EMBARGO_BARS,
-            min_train_bars=MIN_TRAIN_BARS,
-            min_test_bars=MIN_TEST_BARS,
+    required = is_bars + oos_bars + EMBARGO_BARS
+    if required > n_active:
+        raise ValueError(
+            f"Dataset has {n} bars; active range {n_active} cannot hold one fold "
+            f"(needs IS={is_bars} + OOS={oos_bars} + embargo={EMBARGO_BARS})."
         )
 
     return ValidationScheme(
-        mode="rolling_bars",
-        holdout_mode="last_fraction",
-        holdout_cutoff=None,
-        holdout_fraction=DEFAULT_HOLDOUT_FRACTION,
-        n_folds=DEFAULT_N_FOLDS,
+        is_bars=is_bars,
+        oos_bars=oos_bars,
+        step_bars=step_bars,
         embargo_bars=EMBARGO_BARS,
-        min_train_bars=MIN_TRAIN_BARS,
-        min_test_bars=MIN_TEST_BARS,
+        holdout_bars=holdout_bars,
+        n_bars_active=n_active,
     )
 
 
@@ -110,14 +101,14 @@ def describe_validation_scheme(df: pd.DataFrame) -> dict[str, object]:
     scheme = infer_validation_scheme(df)
     folds = walk_forward_folds(df, scheme=scheme)
     return {
-        "mode": scheme.mode,
-        "holdout_mode": scheme.holdout_mode,
-        "holdout_cutoff": str(scheme.holdout_cutoff) if scheme.holdout_cutoff is not None else None,
-        "holdout_fraction": scheme.holdout_fraction,
-        "n_folds": len(folds),
+        "mode": "rolling_bars_sliding",
+        "is_bars": scheme.is_bars,
+        "oos_bars": scheme.oos_bars,
+        "step_bars": scheme.step_bars,
         "embargo_bars": scheme.embargo_bars,
-        "min_train_bars": scheme.min_train_bars,
-        "min_test_bars": scheme.min_test_bars,
+        "holdout_bars": scheme.holdout_bars,
+        "n_bars_active": scheme.n_bars_active,
+        "n_folds": len(folds),
     }
 
 
@@ -125,30 +116,19 @@ def temporal_split(
     df: pd.DataFrame,
     scheme: ValidationScheme | None = None,
 ) -> tuple[pd.DataFrame, pd.DataFrame]:
-    """Layer 1 holdout split."""
+    """Layer 1 holdout split: last `holdout_bars` bars are OOS, rest is IS."""
     scheme = scheme or infer_validation_scheme(df)
-    if scheme.holdout_mode == "date_cutoff" and scheme.holdout_cutoff is not None:
-        cutoff = scheme.holdout_cutoff
-        if isinstance(df.index, pd.DatetimeIndex):
-            is_mask = df.index < cutoff
-        else:
-            time_col = pd.to_datetime(df["time"], unit="s")
-            is_mask = time_col < cutoff
-    else:
-        split_idx = max(scheme.min_train_bars, int(len(df) * (1.0 - scheme.holdout_fraction)))
-        split_idx = min(split_idx, len(df) - scheme.min_test_bars)
-        if split_idx <= 0 or split_idx >= len(df):
-            raise ValueError(
-                f"Dataset has {len(df)} bars, which is too small for holdout split "
-                f"(min_train={scheme.min_train_bars}, min_test={scheme.min_test_bars})."
-            )
-        is_mask = pd.Series(False, index=df.index)
-        is_mask.iloc[:split_idx] = True
-    df_is = df[is_mask].copy()
-    df_oos = df[~is_mask].copy()
+    n = len(df)
+    split_idx = n - scheme.holdout_bars
+    if split_idx <= 0 or split_idx >= n:
+        raise ValueError(
+            f"Dataset has {n} bars, which is too small for holdout split "
+            f"(holdout_bars={scheme.holdout_bars})."
+        )
+    df_is = df.iloc[:split_idx].copy()
+    df_oos = df.iloc[split_idx:].copy()
     logger.info(
-        "temporal_split[%s]: IS=%d bars (ends %s), OOS=%d bars (starts %s)",
-        scheme.holdout_mode,
+        "temporal_split: IS=%d bars (ends %s), OOS=%d bars (starts %s)",
         len(df_is),
         df_is.index[-1] if len(df_is) else "N/A",
         len(df_oos),
@@ -161,66 +141,33 @@ def walk_forward_folds(
     df: pd.DataFrame,
     scheme: ValidationScheme | None = None,
 ) -> list[tuple[pd.DataFrame, pd.DataFrame]]:
-    """Generate walk-forward folds that fit the dataset."""
+    """Sliding bar-based walk-forward folds over the active range.
+
+    Each fold is (IS_slice, OOS_slice) where:
+        IS  = df.iloc[is_start : is_start + is_bars]
+        OOS = df.iloc[is_end + embargo : is_end + embargo + oos_bars]
+    `is_start` advances by `step_bars` between folds. All slices live
+    within the active range (first `n_bars_active` bars).
+    """
     scheme = scheme or infer_validation_scheme(df)
     folds: list[tuple[pd.DataFrame, pd.DataFrame]] = []
-    time_series = _get_time_series(df)
+    active = scheme.n_bars_active
 
-    if scheme.mode == "legacy_dates":
-        for is_start, is_end, oos_start, oos_end in LEGACY_FOLD_DEFINITIONS:
-            is_start_ts = pd.Timestamp(is_start)
-            is_end_ts = pd.Timestamp(is_end)
-            oos_start_ts = pd.Timestamp(oos_start)
-            oos_end_ts = pd.Timestamp(oos_end)
-
-            is_mask = (time_series >= is_start_ts) & (time_series < is_end_ts)
-            oos_mask = (time_series >= oos_start_ts) & (time_series < oos_end_ts)
-
-            df_is_raw = df[is_mask].copy()
-            df_oos = df[oos_mask].copy()
-            if len(df_is_raw) <= scheme.embargo_bars:
-                logger.warning("Fold IS slice too small for embargo (%d bars), skipping", len(df_is_raw))
-                continue
-            df_is = df_is_raw.iloc[:-scheme.embargo_bars].copy()
-            if len(df_is) > 0 and len(df_oos) > 0:
-                folds.append((df_is, df_oos))
-        logger.info("walk_forward_folds[%s]: %d valid folds generated", scheme.mode, len(folds))
-        return folds
-
-    n = len(df)
-    required = scheme.min_train_bars + scheme.min_test_bars + scheme.embargo_bars
-    if n <= required:
-        raise ValueError(
-            f"Dataset has {n} bars, which is too small for rolling folds (needs more than {required})."
-        )
-
-    test_size = max(scheme.min_test_bars, int(round(n * 0.1)))
-    max_test_size = max(
-        scheme.min_test_bars,
-        (n - scheme.min_train_bars - scheme.embargo_bars) // max(scheme.n_folds, 1),
-    )
-    test_size = min(test_size, max_test_size)
-    initial_train = max(scheme.min_train_bars, n - scheme.n_folds * test_size)
-    if initial_train + scheme.embargo_bars + test_size > n:
-        initial_train = max(
-            scheme.min_train_bars,
-            n - (scheme.embargo_bars + scheme.n_folds * test_size),
-        )
-
-    for fold_idx in range(scheme.n_folds):
-        oos_start_idx = initial_train + fold_idx * test_size
-        oos_end_idx = min(oos_start_idx + test_size, n)
-        is_end_idx = oos_start_idx - scheme.embargo_bars
-        if is_end_idx < scheme.min_train_bars:
-            continue
-        if (oos_end_idx - oos_start_idx) < scheme.min_test_bars:
-            continue
-        df_is = df.iloc[:is_end_idx].copy()
-        df_oos = df.iloc[oos_start_idx:oos_end_idx].copy()
-        if len(df_is) > 0 and len(df_oos) > 0:
+    is_start = 0
+    while is_start + scheme.is_bars + scheme.embargo_bars + scheme.oos_bars <= active:
+        is_end = is_start + scheme.is_bars
+        oos_start = is_end + scheme.embargo_bars
+        oos_end = oos_start + scheme.oos_bars
+        df_is = df.iloc[is_start:is_end].copy()
+        df_oos = df.iloc[oos_start:oos_end].copy()
+        if len(df_is) >= scheme.min_train_bars and len(df_oos) >= scheme.min_test_bars:
             folds.append((df_is, df_oos))
+        is_start += scheme.step_bars
 
-    logger.info("walk_forward_folds[%s]: %d valid folds generated", scheme.mode, len(folds))
+    logger.info(
+        "walk_forward_folds[sliding bar]: %d folds (IS=%d, OOS=%d, step=%d) over %d active bars",
+        len(folds), scheme.is_bars, scheme.oos_bars, scheme.step_bars, active,
+    )
     return folds
 
 
@@ -335,17 +282,9 @@ def evaluate_params_on_prepared_folds(
 
         if side == "high":
             score = fold_score_high(df_is_r, df_oos_r, sig_high_is, sig_high_oos)
-            n_is_signals = int(sig_high_is.sum())
-            n_oos_signals = int(sig_high_oos.sum())
         else:
             score = fold_score_low(df_is_r, df_oos_r, sig_low_is, sig_low_oos)
-            n_is_signals = int(sig_low_is.sum())
-            n_oos_signals = int(sig_low_oos.sum())
-
-        if n_is_signals < MIN_SIGNALS_PER_FOLD or n_oos_signals < MIN_SIGNALS_PER_FOLD:
-            fold_scores.append(0.0)
-        else:
-            fold_scores.append(score)
+        fold_scores.append(score)
     return fold_scores
 
 

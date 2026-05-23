@@ -43,8 +43,8 @@ from .validation import (
 
 logger = logging.getLogger(__name__)
 
-VERSION = "Speculatores 14.5"
-VERSION_SLUG = "speculatores_14_5"
+VERSION = "Speculatores 14.5 (Path A scoring)"
+VERSION_SLUG = "speculatores_14_5_pathA"
 DEFAULT_RESULTS_DIR = Path("results")
 DEFAULT_STORAGE_FILE = Path("temp") / f"{VERSION_SLUG}.journal"
 DEFAULT_N_TRIALS = 500
@@ -98,6 +98,91 @@ FLOAT_BOUNDS: dict[str, tuple[float, float]] = {
     "gjr_vote_thresh": (0.05, 0.50),
     "har_vote_thresh": (0.05, 0.50),
 }
+
+# ---------------------------------------------------------------------------
+# Seed: Heuristic Structural preset from
+# pine/speculatores_v14_presets_gold.pine ("SPX 1D 2026-04-05 Heuristic Structural")
+# Keys match the names used in params_from_trial (i.e. "{side}_{name}").
+# enqueue_trial primes worker 0's study with this point so trial #0 starts
+# at the visually-validated structural-turn configuration.
+# ---------------------------------------------------------------------------
+
+SEED_HEURISTIC_STRUCTURAL_HIGH: dict[str, Any] = {
+    "high_S_detect": 14,
+    "high_scale_start": 24,
+    "high_scale_end": 158,
+    "high_scale_step": 3,
+    "high_min_duration": 18,
+    "high_cooldown_bars": 4,
+    "high_price_gate_lb": 18,
+    "high_vola_range_len": 152,
+    "high_er_period": 38,
+    "high_confirm_count": 3,
+    "high_pivot_drift_lb": 11,
+    "high_pivot_drift_confirm_bias": 1,
+    "high_pct_extreme": 0.7400,
+    "high_min_agreement": 0.6600,
+    "high_dur_extreme_pct": 0.6800,
+    "high_vol_surge_thresh": 1.2500,
+    "high_scale_div_thresh": 0.3500,
+    "high_slope_thresh": 0.1600,
+    "high_vola_high_pct": 0.6600,
+    "high_pivot_drift_thresh": 0.0090,
+    "high_pivot_drift_gate_mult": 3.4942,
+    "high_momentum_velocity_thresh": 0.0471,
+    "high_gjr_vote_thresh": 0.3150,
+    "high_har_vote_thresh": 0.4205,
+    "high_er_directional": True,
+    "high_use_trend": True,
+    "high_use_volume": True,
+    "high_use_momentum": False,
+    "high_use_momentum_velocity": False,
+    "high_use_volatility": True,
+    "high_use_er_gate": True,
+    "high_use_gjr_asym": False,
+    "high_use_har_vol": False,
+    "high_vola_method": "StdDev",
+    "high_momentum_velocity_mode": "Reversal",
+}
+
+SEED_HEURISTIC_STRUCTURAL_LOW: dict[str, Any] = {
+    "low_S_detect": 20,
+    "low_scale_start": 17,
+    "low_scale_end": 194,
+    "low_scale_step": 7,
+    "low_min_duration": 14,
+    "low_cooldown_bars": 6,
+    "low_price_gate_lb": 72,
+    "low_vola_range_len": 35,
+    "low_er_period": 52,
+    "low_confirm_count": 2,
+    "low_pivot_drift_lb": 6,
+    "low_pivot_drift_confirm_bias": 0,
+    "low_pct_extreme": 0.8200,
+    "low_min_agreement": 0.8800,
+    "low_dur_extreme_pct": 0.6000,
+    "low_vol_surge_thresh": 1.7413,
+    "low_scale_div_thresh": 0.4000,
+    "low_slope_thresh": 0.4282,
+    "low_vola_high_pct": 0.8900,
+    "low_pivot_drift_thresh": 0.0500,
+    "low_pivot_drift_gate_mult": 3.3731,
+    "low_momentum_velocity_thresh": 0.0064,
+    "low_gjr_vote_thresh": 0.1911,
+    "low_har_vote_thresh": 0.1461,
+    "low_er_directional": True,
+    "low_use_trend": True,
+    "low_use_volume": True,
+    "low_use_momentum": False,
+    "low_use_momentum_velocity": True,
+    "low_use_volatility": True,
+    "low_use_er_gate": True,
+    "low_use_gjr_asym": False,
+    "low_use_har_vol": False,
+    "low_vola_method": "ATR",
+    "low_momentum_velocity_mode": "Trend",
+}
+
 
 BOOL_FIELDS = [
     "er_directional",
@@ -448,6 +533,15 @@ def _worker_entry(
     objective = build_optuna_objective(df, params_from_trial, side)
     done_before = len([t for t in study.trials if t.state in TRIAL_STATES_DONE])
     logger.info("Worker %d sees %d finished trials for %s", worker_index, done_before, side)
+    if worker_index == 0 and done_before == 0:
+        seed_params = (
+            SEED_HEURISTIC_STRUCTURAL_HIGH if side == "high"
+            else SEED_HEURISTIC_STRUCTURAL_LOW
+        )
+        study.enqueue_trial(seed_params)
+        logger.info(
+            "Worker 0 seeded %s study with Heuristic Structural preset", side,
+        )
     stop_cb = MaxTrialsCallback(config.trials_per_side, states=TRIAL_STATES_DONE)
     study.optimize(
         objective,
