@@ -50,15 +50,55 @@ pir_of(float val, int lookback) =>
     float hi = ta.highest(val, lookback)
     hi != lo ? (val - lo) / (hi - lo) : 0.5
 
+// === PARITY SHIM ============================================================
+// Pine's stateful ta.* built-ins (ta.sma, ta.lowest, ta.highest) all share ONE
+// internal history buffer per written call site. Putting them inside a loop
+// with a variable length silently corrupts the buffer — for each scale_step we
+// stomp the previous scale's state. That produced a 0.14-mean / 0.9-max
+// divergence vs Python and a 2x signal-count gap on Path A 5k.
+//
+// Fix: never call a stateful ta.* inside the variable-s loop. Use ta.cum(close)
+// (one stateless cumulative sum at module scope) to compute SMA of any length
+// as a constant-time subtraction, and reconstruct ratio history bar-by-bar
+// inside the loop with plain arithmetic on historical access. No state is
+// shared across scales because we don't touch any stateful built-in inside the
+// loop body.
+// ============================================================================
+float _csum_close = ta.cum(close)
+
+// SMA at scale s, evaluated at bar (current - back). Pure arithmetic, no state.
+sma_at(int s, int back) =>
+    float a = _csum_close[back]
+    float b = _csum_close[back + s]
+    na(a) or na(b) ? float(na) : (a - b) / s
+
+// PIR of the close/sma_s ratio series, scanned over the last `lb` bars.
+// Uses only historical access — no ta.lowest/ta.highest — so it has no
+// per-call-site state to corrupt across scales.
+pir_for_scale(int s, int lb) =>
+    float sma_now = sma_at(s, 0)
+    float val_now = sma_now > 0 ? close / sma_now : 1.0
+    float result = 0.5
+    if not na(val_now)
+        float lo = val_now
+        float hi = val_now
+        for back = 1 to lb - 1
+            float sma_b = sma_at(s, back)
+            float c_b = close[back]
+            float r_b = sma_b > 0 ? c_b / sma_b : 1.0
+            if not na(r_b)
+                lo := math.min(lo, r_b)
+                hi := math.max(hi, r_b)
+        result := hi != lo ? (val_now - lo) / (hi - lo) : 0.5
+    result
+
 calc_agreement(int scale_start, int scale_end, int scale_step, float pct_extreme) =>
     int n_scales = 0
     int scales_high = 0
     int scales_low = 0
     for s = scale_start to scale_end by scale_step
-        float sma_s = ta.sma(close, s)
-        float ratio_s = sma_s > 0 ? close / sma_s : 1.0
         int lb = math.max(s, 20)
-        float pir_s = pir_of(ratio_s, lb)
+        float pir_s = pir_for_scale(s, lb)
         scales_high += pir_s > pct_extreme ? 1 : 0
         scales_low += pir_s < (1.0 - pct_extreme) ? 1 : 0
         n_scales += 1
