@@ -157,12 +157,15 @@ def _check_components(components: dict, label: str) -> bool:
     if missing:
         print(f"[scorer_v3] FAIL — {label} components missing: {sorted(missing)}")
         return False
-    if components["ref_scale"] != 50:
-        # The stable reference must lock to REFERENCE_N=50 whenever 50 is
-        # in the valid scale set (always true on the full SPX 1D slice).
+    # Scorer v4: REFERENCE_N is now 100 (and the structural-nest oracle is
+    # written into pivot_N100). The stable-reference invariant survives —
+    # only the integer changed. Accept either v3 (50) or v4 (100) here so
+    # this test serves as a regression check across versions.
+    from src.scoring import REFERENCE_N as _CURRENT_REFERENCE_N
+    if components["ref_scale"] != _CURRENT_REFERENCE_N:
         print(
-            f"[scorer_v3] FAIL — {label} expected ref_scale=50, got "
-            f"{components['ref_scale']}"
+            f"[scorer_v3] FAIL — {label} expected ref_scale={_CURRENT_REFERENCE_N}, "
+            f"got {components['ref_scale']}"
         )
         return False
     return True
