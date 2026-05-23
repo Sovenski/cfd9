@@ -234,12 +234,52 @@ def build_optuna_objective(
         fold_scores: list[float] = []
         for fold_idx, score in enumerate(evaluate_params_on_prepared_folds(params, side, prepared_folds)):
             fold_scores.append(score)
-            trial.report(float(np.mean(fold_scores)), fold_idx)
+            # Items 8 + 9: bandit-style Lower-Confidence-Bound aggregation
+            # (mean - 0.5·std). Penalises high-variance configurations that
+            # happen to mean-score well by being lucky on one fold.
+            arr_running = np.asarray(fold_scores, dtype=float)
+            running_lcb = float(arr_running.mean() - 0.5 * arr_running.std())
+            trial.report(running_lcb, fold_idx)
             if trial.should_prune():
                 raise optuna.exceptions.TrialPruned()
-        return float(np.mean(fold_scores))
+        arr = np.asarray(fold_scores, dtype=float)
+        return float(arr.mean() - 0.5 * arr.std())
 
     return objective
+
+
+def fold_scores_bootstrap_ci(
+    scores: list[float],
+    n_boot: int = 1000,
+    alpha: float = 0.10,
+) -> tuple[float, float]:
+    """Block-bootstrap (block=1) confidence interval for the mean of fold scores.
+
+    Item 10. Used as reporting metadata alongside the LCB objective so the
+    report writer can show how tight the per-fold mean estimate is. The
+    block length is 1 because folds are already coarse, near-independent
+    units after the embargo split.
+
+    Args:
+        scores: Per-fold OOS scores.
+        n_boot: Number of bootstrap resamples (default 1000).
+        alpha: Two-sided significance level (default 0.10 → 90% CI).
+
+    Returns:
+        ``(lower, upper)`` percentiles of the bootstrap mean distribution.
+        Returns ``(0.0, 0.0)`` for an empty input list.
+    """
+    if not scores:
+        return (0.0, 0.0)
+    arr = np.asarray(scores, dtype=float)
+    rng = np.random.default_rng(42)
+    boot_means = np.empty(n_boot, dtype=float)
+    n = len(arr)
+    for i in range(n_boot):
+        boot_means[i] = rng.choice(arr, size=n, replace=True).mean()
+    lo = float(np.percentile(boot_means, 100.0 * alpha / 2.0))
+    hi = float(np.percentile(boot_means, 100.0 * (1.0 - alpha / 2.0)))
+    return (lo, hi)
 
 
 def prepare_walk_forward_folds(

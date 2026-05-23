@@ -37,6 +37,7 @@ from .validation import (
     build_optuna_objective,
     describe_validation_scheme,
     evaluate_params_on_prepared_folds,
+    fold_scores_bootstrap_ci,
     load_cross_asset,
     load_data,
     prepare_walk_forward_folds,
@@ -55,6 +56,18 @@ DEFAULT_STARTUP_TRIALS = 80
 DEFAULT_WORKERS_PER_SIDE = 2
 DEFAULT_SEED = 42
 DEFAULT_STABILITY_TRIALS = 50
+DEFAULT_GLOBAL_STABILITY_TRIALS = 20
+
+# Scorer v2 item 12 — stability-verdict thresholds promoted to module constants
+# so tuning them no longer requires a code edit. Both gate the "stable basin"
+# verdict in summarize_stability().
+#   * ROBUST_SHARE: minimum fraction of local perturbations that must score
+#     at least 90% of best_value for the basin to count as "robust".
+#   * OUTLIER_MEAN_VS_BEST: minimum local_mean / best_value ratio. If the
+#     average perturbation collapses well below the winner, the winner is
+#     likely an outlier rather than the centre of a stable basin.
+STABILITY_ROBUST_SHARE_THRESHOLD: float = 0.2
+STABILITY_OUTLIER_MEAN_VS_BEST_THRESHOLD: float = 0.6
 
 TRIAL_STATES_DONE = (
     TrialState.COMPLETE,
@@ -649,7 +662,15 @@ def evaluate_folds_for_params(
     params: Params,
     side: str,
 ) -> pd.DataFrame:
+    """Per-fold IS/OOS scores for one side.
+
+    Scorer v2 item 10: the returned DataFrame carries a ``boot_lo`` and
+    ``boot_hi`` column on every row, populated with a single 90% block
+    bootstrap CI computed over the per-fold OOS scores. The values are
+    repeated across rows so they survive flat CSV/Markdown rendering.
+    """
     rows: list[dict[str, Any]] = []
+    oos_scores: list[float] = []
     for idx, (df_is, df_oos) in enumerate(walk_forward_folds(df)):
         df_is_r = df_is.reset_index(drop=True)
         df_oos_r = df_oos.reset_index(drop=True)
@@ -662,6 +683,7 @@ def evaluate_folds_for_params(
         sig_key = f"signal_{side}"
         is_score = compute_side_score(df_is_r, det_is[sig_key], side)
         oos_score = compute_side_score(df_oos_r, det_oos[sig_key], side)
+        oos_scores.append(float(oos_score))
         rows.append(
             {
                 "fold": idx + 1,
@@ -675,7 +697,12 @@ def evaluate_folds_for_params(
                 "gap": round(float(is_score - oos_score), 4),
             }
         )
-    return pd.DataFrame(rows)
+    df_out = pd.DataFrame(rows)
+    if oos_scores:
+        boot_lo, boot_hi = fold_scores_bootstrap_ci(oos_scores)
+        df_out["boot_lo"] = round(boot_lo, 4)
+        df_out["boot_hi"] = round(boot_hi, 4)
+    return df_out
 
 
 def evaluate_holdout_for_params(
@@ -744,6 +771,30 @@ def _sample_local_params(
     return Params(**{**base_dict, **overrides})
 
 
+def _sample_global_params(
+    side: str,
+    rng: random.Random,
+) -> Params:
+    """Uniform global restart sampler — Scorer v2 item 11.
+
+    Draws each int/float field uniformly from its declared bounds, each
+    bool 50/50, and each categorical uniformly. Used by
+    ``summarize_stability`` to compare the local basin around a winner
+    against the wider search space.
+    """
+    base_dict = _params_fields(Params())
+    overrides: dict[str, Any] = {}
+    for field_name, (low, high) in INT_BOUNDS.items():
+        overrides[f"{field_name}_{side}"] = rng.randint(low, high)
+    for field_name, (low, high) in FLOAT_BOUNDS.items():
+        overrides[f"{field_name}_{side}"] = rng.uniform(low, high)
+    for field_name in BOOL_FIELDS:
+        overrides[f"{field_name}_{side}"] = bool(rng.random() < 0.5)
+    for field_name, choices in CATEGORY_FIELDS.items():
+        overrides[f"{field_name}_{side}"] = rng.choice(choices)
+    return Params(**{**base_dict, **overrides})
+
+
 def summarize_stability(
     params: Params,
     side: str,
@@ -751,7 +802,21 @@ def summarize_stability(
     prepared_folds: list[Any],
     trials: int,
     seed: int,
+    global_trials: int = DEFAULT_GLOBAL_STABILITY_TRIALS,
 ) -> tuple[dict[str, Any], pd.DataFrame]:
+    """Stability diagnostic — local basin + non-local global comparison.
+
+    Scorer v2 items 11 + 12:
+    - Item 11 augments the existing local-perturbation trials with
+      ``global_trials`` uniformly-sampled restarts so the report can
+      contrast the basin around the winner with the wider search space.
+      ``local_vs_global_gap = local_mean - global_mean`` quantifies the
+      lift attributable to being in the basin.
+    - Item 12 routes the verdict thresholds through module constants
+      (``STABILITY_ROBUST_SHARE_THRESHOLD``,
+      ``STABILITY_OUTLIER_MEAN_VS_BEST_THRESHOLD``) so they no longer
+      require a code edit to retune.
+    """
     rng = random.Random(seed)
     rows: list[dict[str, Any]] = []
     scores: list[float] = []
@@ -766,10 +831,33 @@ def summarize_stability(
                 "score": score,
                 "delta_vs_best": score - best_value,
                 "pct_of_best": (score / best_value) if best_value > 0 else 0.0,
+                "sample": "local",
+            }
+        )
+
+    # Item 11: non-local random-restart sampler. Uses a separate RNG so
+    # the local sequence stays bit-identical to prior runs at the same seed.
+    global_rng = random.Random(seed ^ 0xA17EBA5E)
+    global_scores: list[float] = []
+    for idx in range(max(0, int(global_trials))):
+        sampled = _sample_global_params(side, global_rng)
+        fold_scores = evaluate_params_on_prepared_folds(sampled, side, prepared_folds)
+        score = float(_mean(fold_scores))
+        global_scores.append(score)
+        rows.append(
+            {
+                "trial": trials + idx + 1,
+                "score": score,
+                "delta_vs_best": score - best_value,
+                "pct_of_best": (score / best_value) if best_value > 0 else 0.0,
+                "sample": "global",
             }
         )
 
     mean_score = _mean(scores)
+    global_mean = _mean(global_scores) if global_scores else 0.0
+    local_vs_global_gap = mean_score - global_mean
+
     if best_value <= 0:
         share_ge_90 = None
         mean_ratio = None
@@ -777,7 +865,11 @@ def summarize_stability(
     else:
         share_ge_90 = sum(score >= (0.9 * best_value) for score in scores) / len(scores)
         mean_ratio = mean_score / best_value
-        if share_ge_90 >= 0.2 and mean_ratio >= 0.6:
+        # Item 12 — gating thresholds via module constants.
+        if (
+            share_ge_90 >= STABILITY_ROBUST_SHARE_THRESHOLD
+            and mean_ratio >= STABILITY_OUTLIER_MEAN_VS_BEST_THRESHOLD
+        ):
             verdict = "stable basin"
         elif share_ge_90 >= 0.08 and mean_ratio >= 0.35:
             verdict = "moderately stable"
@@ -794,6 +886,10 @@ def summarize_stability(
         "share_ge_90pct_best": round(share_ge_90, 3) if share_ge_90 is not None else None,
         "mean_vs_best": round(mean_ratio, 3) if mean_ratio is not None else None,
         "max_local": round(max(scores), 6) if scores else 0.0,
+        "global_trials": len(global_scores),
+        "global_mean": round(global_mean, 6),
+        "global_std": round(_std(global_scores), 6) if global_scores else 0.0,
+        "local_vs_global_gap": round(local_vs_global_gap, 6),
         "verdict": verdict,
     }
     return summary, pd.DataFrame(rows)
