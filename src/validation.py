@@ -219,7 +219,20 @@ def build_optuna_objective(
     params_from_trial: Callable[[optuna.Trial, str], Params],
     side: str,
 ) -> Callable[[optuna.Trial], float]:
-    """Build an Optuna objective function for one study side."""
+    """Build an Optuna objective function for one study side.
+
+    Scorer v3 changes (items A1, A2, B3):
+    - The objective value is the **bootstrap-CI lower bound** on the
+      per-fold mean instead of the v2 ``mean - 0.5·std`` heuristic. The
+      ``0.5`` was a magic number unrelated to the fold count or fold
+      variance; the bootstrap LCB calibrates itself to both.
+    - The bootstrap uses block length 2 (item A2) to respect the heavy
+      IS overlap between adjacent folds (IS=10%, step=5% → 50% overlap).
+    - Per-fold component metrics (item B3) are aggregated and exposed
+      via ``trial.set_user_attr`` so post-hoc Pareto inspection can be
+      done without rerunning trials. The scalar objective contract is
+      unchanged — components are diagnostic only.
+    """
     if side not in ("high", "low"):
         raise ValueError(f"side must be 'high' or 'low', got {side!r}")
 
@@ -232,38 +245,116 @@ def build_optuna_objective(
     def objective(trial: optuna.Trial) -> float:
         params = params_from_trial(trial, side)
         fold_scores: list[float] = []
-        for fold_idx, score in enumerate(evaluate_params_on_prepared_folds(params, side, prepared_folds)):
+        per_fold_components: list[dict[str, float]] = []
+        for fold_idx, (score, components) in enumerate(
+            _evaluate_with_components(params, side, prepared_folds)
+        ):
             fold_scores.append(score)
-            # Items 8 + 9: bandit-style Lower-Confidence-Bound aggregation
-            # (mean - 0.5·std). Penalises high-variance configurations that
-            # happen to mean-score well by being lucky on one fold.
-            arr_running = np.asarray(fold_scores, dtype=float)
-            running_lcb = float(arr_running.mean() - 0.5 * arr_running.std())
+            per_fold_components.append(components)
+            # Scorer v3 (A1 + A2): running LCB is the bootstrap-CI lower
+            # bound with block length 2. Falls back gracefully on single
+            # folds (CI lower == CI upper == mean).
+            running_lcb = fold_scores_bootstrap_ci(
+                fold_scores, n_boot=1000, alpha=0.10, block_len=2
+            )[0]
             trial.report(running_lcb, fold_idx)
             if trial.should_prune():
+                _set_component_attrs(trial, per_fold_components)
                 raise optuna.exceptions.TrialPruned()
-        arr = np.asarray(fold_scores, dtype=float)
-        return float(arr.mean() - 0.5 * arr.std())
+        # Final objective: bootstrap LCB over all folds (A1).
+        final_lcb = fold_scores_bootstrap_ci(
+            fold_scores, n_boot=1000, alpha=0.10, block_len=2
+        )[0]
+        _set_component_attrs(trial, per_fold_components)
+        return float(final_lcb)
 
     return objective
+
+
+def _evaluate_with_components(
+    params: Params,
+    side: str,
+    prepared_folds: list[PreparedFold],
+):
+    """Generator yielding ``(fold_score, components)`` for each prepared fold.
+
+    Scorer v3 item B3 helper. Mirrors
+    ``evaluate_params_on_prepared_folds`` but threads the component
+    diagnostics back out alongside the scalar.
+    """
+    from .scoring import fold_score_high, fold_score_low
+
+    for df_is_r, df_oos_r, artifacts_is, artifacts_oos in prepared_folds:
+        det_is = SpeculatorDetector(df_is_r, params, artifacts_is).run()
+        det_oos = SpeculatorDetector(df_oos_r, params, artifacts_oos).run()
+        if side == "high":
+            score, components = fold_score_high(
+                df_is_r,
+                df_oos_r,
+                det_is["signal_high"],
+                det_oos["signal_high"],
+                return_components=True,
+            )
+        else:
+            score, components = fold_score_low(
+                df_is_r,
+                df_oos_r,
+                det_is["signal_low"],
+                det_oos["signal_low"],
+                return_components=True,
+            )
+        yield float(score), components
+
+
+def _set_component_attrs(
+    trial: optuna.Trial,
+    per_fold_components: list[dict[str, float]],
+) -> None:
+    """Aggregate per-fold component metrics and attach to the trial.
+
+    Scorer v3 item B3. Means are computed across the (possibly partial)
+    list of folds completed before pruning so the user attrs are
+    available even on pruned trials.
+    """
+    if not per_fold_components:
+        return
+    keys = per_fold_components[0].keys()
+    for key in keys:
+        values = [float(c.get(key, 0.0)) for c in per_fold_components]
+        try:
+            trial.set_user_attr(f"component_mean_{key}", float(np.mean(values)))
+        except Exception:  # pragma: no cover - best-effort logging
+            logger.debug("set_user_attr failed for component_mean_%s", key)
 
 
 def fold_scores_bootstrap_ci(
     scores: list[float],
     n_boot: int = 1000,
     alpha: float = 0.10,
+    block_len: int = 2,
 ) -> tuple[float, float]:
-    """Block-bootstrap (block=1) confidence interval for the mean of fold scores.
+    """Stationary block-bootstrap CI for the mean of fold scores.
 
-    Item 10. Used as reporting metadata alongside the LCB objective so the
-    report writer can show how tight the per-fold mean estimate is. The
-    block length is 1 because folds are already coarse, near-independent
-    units after the embargo split.
+    Scorer v3 (item A2): block length defaults to 2 to respect the
+    heavy IS overlap between adjacent walk-forward folds (the validation
+    scheme uses IS=10% with step=5%, giving 50% overlap). With block=1
+    the bootstrap treats folds as independent and reports an overly
+    tight CI.
+
+    For each bootstrap iteration we sample ``ceil(n / block_len)``
+    random start indices, take ``block_len`` consecutive scores per
+    start (mod n_folds, stationary block bootstrap), concatenate, and
+    truncate to length n_folds. The mean of that sample is one bootstrap
+    draw.
+
+    Single-fold inputs return ``(score, score)`` so callers can use the
+    lower bound as a graceful fallback.
 
     Args:
-        scores: Per-fold OOS scores.
+        scores: Per-fold OOS scores (any sequence convertible to float).
         n_boot: Number of bootstrap resamples (default 1000).
         alpha: Two-sided significance level (default 0.10 → 90% CI).
+        block_len: Block length for stationary bootstrap (default 2).
 
     Returns:
         ``(lower, upper)`` percentiles of the bootstrap mean distribution.
@@ -271,12 +362,21 @@ def fold_scores_bootstrap_ci(
     """
     if not scores:
         return (0.0, 0.0)
-    arr = np.asarray(scores, dtype=float)
+    arr = np.asarray(list(scores), dtype=float)
+    n = len(arr)
+    if n == 1:
+        return (float(arr[0]), float(arr[0]))
+    block_len = max(1, min(int(block_len), n))
+    n_blocks = int(np.ceil(n / block_len))
     rng = np.random.default_rng(42)
     boot_means = np.empty(n_boot, dtype=float)
-    n = len(arr)
-    for i in range(n_boot):
-        boot_means[i] = rng.choice(arr, size=n, replace=True).mean()
+    block_offsets = np.arange(block_len)
+    for b in range(n_boot):
+        starts = rng.integers(0, n, size=n_blocks)
+        # Stationary block bootstrap with wrap-around.
+        idx = (starts[:, None] + block_offsets[None, :]) % n  # (n_blocks, block_len)
+        sample = arr[idx.reshape(-1)][:n]
+        boot_means[b] = sample.mean()
     lo = float(np.percentile(boot_means, 100.0 * alpha / 2.0))
     hi = float(np.percentile(boot_means, 100.0 * (1.0 - alpha / 2.0)))
     return (lo, hi)

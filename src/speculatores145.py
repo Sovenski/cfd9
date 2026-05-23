@@ -20,6 +20,7 @@ from datetime import datetime
 from pathlib import Path
 from typing import Any
 
+import numpy as np
 import optuna
 import pandas as pd
 from optuna.pruners import MedianPruner
@@ -990,14 +991,52 @@ def build_pine_block(
     return "\n".join(lines)
 
 
+def _deflated_best_value(study: optuna.Study) -> float | None:
+    """Scorer v3 (D1) Deflated-Sharpe-style shrink on best_value.
+
+    With 500+ trials × multiple folds × multiple scales, the headline
+    ``best_value`` is biased upward by multiple-comparison effects. We
+    report a Bonferroni-flavoured deflation::
+
+        deflated = best_value - std(top_k) · sqrt(2·log(n_trials)/n_trials)
+
+    using the top-50 completed values as the variance proxy. Returns
+    ``None`` if there is not enough data to compute meaningfully (no
+    finished trials).
+    """
+    finished_values = [
+        float(t.value)
+        for t in study.trials
+        if t.value is not None and t.state == TrialState.COMPLETE
+    ]
+    if not finished_values:
+        return None
+    n_trials = len(finished_values)
+    top_k = sorted(finished_values, reverse=True)[:50]
+    best_value = float(study.best_value)
+    if len(top_k) >= 2 and n_trials >= 2:
+        import math as _math
+        deflation = float(
+            np.std(top_k) * _math.sqrt(2.0 * _math.log(max(2, n_trials)) / max(1, n_trials))
+        )
+    else:
+        deflation = 0.0
+    return float(best_value - deflation)
+
+
 def study_summary(study: optuna.Study) -> dict[str, Any]:
     states = {state.name.lower(): 0 for state in TrialState}
     for trial in study.trials:
         states[trial.state.name.lower()] += 1
+    deflated_best = _deflated_best_value(study)
     return {
         "study_name": study.study_name,
         "best_trial": study.best_trial.number,
         "best_value": round(float(study.best_trial.value), 6),
+        # Scorer v3 (D1): reporting-only multiple-comparison deflation.
+        "deflated_best_value": (
+            round(deflated_best, 6) if deflated_best is not None else None
+        ),
         "n_trials": len(study.trials),
         "states": states,
     }

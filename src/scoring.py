@@ -1,6 +1,28 @@
-"""Speculatores Pivot Optimizer — Scorer v2.
+"""Speculatores Pivot Optimizer — Scorer v3.
 
-Scorer v2 (this module) implements 14 of 16 expert-suggested fixes on top
+Scorer v3 is a refinement of Scorer v2: same overall architecture
+(smooth IS-OOS exponential penalty, two-sided harmonic excess penalty,
+smooth recall saturation, 1-to-1 matching, smooth multi-scale aggregation),
+with the following tightenings identified by a second unprimed-panel review:
+
+- ``precision_at_n_stats``: matching is now globally-optimal via
+  ``scipy.optimize.linear_sum_assignment`` (Hungarian) on the cost matrix
+  ``cost[i,j] = |signal_i - pivot_j| + lead_bias·1[diff<0]`` so the
+  assignment is invariant to bar-order traversal AND prefers leading
+  predictions over lagging ones at equal absolute distance.
+- ``compute_side_score``: the reference for the two-sided excess penalty
+  is now the FIXED ``REFERENCE_N=50`` pivot scale (or its nearest valid
+  neighbour) instead of the median of valid scales, eliminating a
+  discontinuity that fired when a scale dropped out of the valid set.
+- ``compute_side_score`` exposes a ``return_components`` kwarg that
+  yields a per-side component dict (precision/recall at the reference
+  scale, frequency_factor, excess_penalty, per-scale scores) so the
+  validation layer can log component metrics via ``trial.set_user_attr``.
+
+The Scorer v2 docstring (preserved below for history) describes the
+underlying mechanics.
+
+Scorer v2 (parent) implements 14 of 16 expert-suggested fixes on top
 of the prior Path A surgical revision. Detector logic is untouched — only
 scoring/aggregation semantics changed.
 
@@ -50,6 +72,7 @@ from typing import Union
 import numpy as np
 import pandas as pd
 from numpy.lib.stride_tricks import sliding_window_view
+from scipy.optimize import linear_sum_assignment
 
 logger = logging.getLogger(__name__)
 
@@ -64,6 +87,11 @@ LEAD_WINDOW_CAP: int = 30        # Floor for the scale-adaptive forward TP-windo
 PRECISION_EXPONENT: float = 1.2  # Precision-leaning per-scale score
 RECALL_TARGET: float = 0.40      # Reference recall target (Scorer v2: scaled by sqrt(REFERENCE_N/N))
 REFERENCE_N: int = 50            # Pivot scale at which RECALL_TARGET applies unchanged (item 5)
+# Scorer v3: lead-biased tiebreak in Hungarian matching. A 1-bar lead matches
+# before a 1-bar lag at equal absolute distance (0.5 < 1.0).
+LEAD_BIAS: float = 0.5
+_HUNGARIAN_INF: float = 1e9      # Out-of-window cost; threshold to detect "no match"
+_HUNGARIAN_INF_THRESHOLD: float = 1e8
 
 
 # ---------------------------------------------------------------------------
@@ -167,18 +195,25 @@ def precision_at_n_stats(
     side: str,
     n: int,
 ) -> dict[str, float | int]:
-    """Lead-aware precision at scale N — Scorer v2: greedy 1-to-1 matching.
+    """Lead-aware precision at scale N — Scorer v3: Hungarian matching.
 
-    Items 6 + 7. Signals and pivots are matched as nearest-neighbor
-    1-to-1 pairs: each signal claims at most one unmatched pivot within
-    its tolerance window, and each pivot can satisfy at most one signal.
-    This eliminates the prior double-counting where a single dense pivot
-    cluster could "rescue" many signals as TP.
+    Items B1 + B2 (Scorer v3): replaces v2's greedy bar-order assignment
+    with the globally-optimal linear-sum (Hungarian) assignment on a cost
+    matrix. The cost penalises lagging matches with a +LEAD_BIAS offset,
+    so at equal absolute distance a leading pivot is preferred over a
+    lagging one — encoding the detector's stated value (anticipation).
 
     Tolerance window for a signal at bar ``t``: ``[t-2, t + cap]`` where
     ``cap = min(N, max(LEAD_WINDOW_CAP, round(0.3·N)))`` — at least 30
     bars (the legacy floor), at least 30% of N for larger scales, but
     never more than N itself.
+
+    Item C1 (Scorer v3, verification): ``total_pivots`` is computed from
+    ``np.flatnonzero(pivots == pivot_sign)`` which counts only bars
+    actually labelled by ``label_pivots``. ``label_pivots`` leaves the
+    first and last ``N`` bars at zero because the centered 2N+1 window
+    cannot fit there, so the unobservable edge zones are correctly
+    excluded from the recall denominator.
 
     Args:
         signals: Boolean Series — True where a signal fired.
@@ -197,10 +232,13 @@ def precision_at_n_stats(
 
     sig_mask = signals.fillna(False).astype(bool).to_numpy()
     signal_positions = np.flatnonzero(sig_mask)
+    # C1: pivots == pivot_sign excludes the edge zones because
+    # label_pivots leaves the first/last N bars at 0 (window doesn't fit).
     pivot_positions = np.flatnonzero(pivots.to_numpy() == pivot_sign)
     total_pivots = int(pivot_positions.size)
+    n_signals_total = int(signal_positions.size)
 
-    if signal_positions.size == 0:
+    if n_signals_total == 0:
         return {
             "precision": 0.0,
             "tp": 0,
@@ -210,41 +248,40 @@ def precision_at_n_stats(
             "total_pivots": total_pivots,
         }
 
-    # Greedy 1-to-1 assignment (item 6). For each signal (in bar order),
-    # pick the nearest unmatched pivot inside [t-2, t+cap]. "Nearest" is
-    # by absolute bar distance so we don't bias toward backward or
-    # forward matches; ties broken in favour of the earlier pivot.
-    matched_pivot_mask = np.zeros(total_pivots, dtype=bool)
-    tp = 0
-    fp = 0
-    for sig_pos in signal_positions:
-        window_lo = sig_pos - 2
-        window_hi = sig_pos + cap
-        in_window = (
-            (pivot_positions >= window_lo)
-            & (pivot_positions <= window_hi)
-            & (~matched_pivot_mask)
-        )
-        candidate_idx = np.flatnonzero(in_window)
-        if candidate_idx.size == 0:
-            fp += 1
-            continue
-        candidate_positions = pivot_positions[candidate_idx]
-        # Pick nearest by |distance|; np.argmin ties go to the lower index,
-        # i.e. the earlier pivot — deterministic and stable.
-        dists = np.abs(candidate_positions - sig_pos)
-        best = candidate_idx[int(np.argmin(dists))]
-        matched_pivot_mask[best] = True
-        tp += 1
+    if total_pivots == 0:
+        return {
+            "precision": 0.0,
+            "tp": 0,
+            "fp": n_signals_total,
+            "n_signals": n_signals_total,
+            "matched_pivots": 0,
+            "total_pivots": 0,
+        }
 
-    n_signals = tp + fp
-    precision = (tp / n_signals) if n_signals else 0.0
+    # Hungarian (linear-sum assignment) on a rectangular cost matrix.
+    # diffs[i, j] = pivot_j - signal_i. Positive => lead (pivot ahead of
+    # signal). In-window: -2 <= diff <= cap.
+    diffs = pivot_positions[None, :] - signal_positions[:, None]
+    in_window = (diffs >= -2) & (diffs <= cap)
+    cost = np.abs(diffs).astype(float)
+    cost = cost + np.where(diffs < 0, LEAD_BIAS, 0.0)
+    cost[~in_window] = _HUNGARIAN_INF
+
+    sig_idx, piv_idx = linear_sum_assignment(cost)
+    valid_mask = cost[sig_idx, piv_idx] < _HUNGARIAN_INF_THRESHOLD
+    matched_signals = set(int(s) for s in sig_idx[valid_mask].tolist())
+    matched_pivots_set = set(int(p) for p in piv_idx[valid_mask].tolist())
+
+    tp = len(matched_signals)
+    fp = n_signals_total - tp
+    matched_pivots_count = len(matched_pivots_set)
+    precision = (tp / n_signals_total) if n_signals_total else 0.0
     return {
         "precision": float(precision),
         "tp": int(tp),
         "fp": int(fp),
-        "n_signals": int(n_signals),
-        "matched_pivots": int(matched_pivot_mask.sum()),
+        "n_signals": int(n_signals_total),
+        "matched_pivots": int(matched_pivots_count),
         "total_pivots": total_pivots,
     }
 
@@ -276,8 +313,14 @@ def compute_side_score(
     side: str,
     scales: list[int] | None = None,
     return_per_scale: bool = False,
-) -> Union[float, tuple[float, dict[int, float]]]:
-    """Score one detector side on a single slice (IS or OOS) — Scorer v2.
+    return_components: bool = False,
+) -> Union[
+    float,
+    tuple[float, dict[int, float]],
+    tuple[float, dict[str, float]],
+    tuple[float, dict[int, float], dict[str, float]],
+]:
+    """Score one detector side on a single slice (IS or OOS) — Scorer v3.
 
     Per-scale contribution::
 
@@ -295,10 +338,18 @@ def compute_side_score(
     - ``frequency_factor = min(1, signal_rate / MIN_RATE)`` — floor
       against detectors that fire too rarely to be useful.
     - ``excess_penalty = 2·n·t / (n² + t²)`` (items 2 + 3): two-sided
-      harmonic-mean-of-ratios between ``n = n_signals`` and ``t = median
-      valid scale's total_pivots``. Equals 1 at parity, decays
-      symmetrically toward 0 as either side grows much larger. Using
-      the median (not the mean) avoids small-N domination.
+      harmonic-mean-of-ratios between ``n = n_signals`` and
+      ``t = total_pivots_at_REFERENCE_N``. Equals 1 at parity, decays
+      symmetrically toward 0 as either side grows much larger.
+
+      Scorer v3 (item B4): the reference pivot count is now read from
+      the FIXED ``REFERENCE_N=50`` valid scale (or its nearest valid
+      neighbour if 50 itself fits no centered window), replacing v2's
+      MEDIAN-of-valid-scales selection. The median choice introduced a
+      hidden discontinuity: when a slice length crossed a scale-validity
+      threshold (e.g. dropping the 500-pivot scale), the median shifted
+      one slot and the penalty jumped. The stable reference removes that
+      discontinuity.
 
     Args:
         df: OHLCV slice to score (must contain or be augmentable with
@@ -310,28 +361,53 @@ def compute_side_score(
         return_per_scale: If True (item 15), return a
             ``(scalar_score, {N: scale_score})`` tuple. The default of
             False preserves the scalar return contract.
+        return_components: If True (Scorer v3 item B3), also return a
+            component-diagnostics dict alongside the scalar score (and
+            per-scale dict if ``return_per_scale`` is also True). The dict
+            keys cover precision at REFERENCE_N, recall_saturated at
+            REFERENCE_N, frequency_factor, excess_penalty, ref_pivots,
+            and n_signals. Used by ``build_optuna_objective`` to log
+            per-trial component metrics via ``trial.set_user_attr``.
 
     Returns:
-        Float score in ``[0, 1]``, or ``(score, {N: scale_score})`` when
-        ``return_per_scale`` is True.
+        Float score in ``[0, 1]``, or a tuple whose shape depends on the
+        two flags:
+        - ``return_per_scale`` only → ``(score, {N: scale_score})``
+        - ``return_components`` only → ``(score, components_dict)``
+        - both → ``(score, {N: scale_score}, components_dict)``
     """
     if side not in ("high", "low"):
         raise ValueError(f"side must be 'high' or 'low', got {side!r}")
     n_bars = len(df)
     n_signals = int(signals.fillna(False).astype(bool).sum())
-    if n_bars == 0 or n_signals == 0:
+
+    def _empty_return():
+        empty_components = {
+            "precision_at_ref": 0.0,
+            "recall_saturated_at_ref": 0.0,
+            "frequency_factor": 0.0,
+            "excess_penalty": 0.0,
+            "ref_pivots": 0.0,
+            "ref_scale": 0,
+            "n_signals": float(n_signals),
+        }
+        if return_per_scale and return_components:
+            return 0.0, {}, empty_components
         if return_per_scale:
             return 0.0, {}
+        if return_components:
+            return 0.0, empty_components
         return 0.0
+
+    if n_bars == 0 or n_signals == 0:
+        return _empty_return()
 
     if scales is None:
         scales = _valid_scales(n_bars)
     else:
         scales = [N for N in scales if n_bars >= 2 * N + 1]
     if not scales:
-        if return_per_scale:
-            return 0.0, {}
-        return 0.0
+        return _empty_return()
 
     signal_rate = n_signals / n_bars
     frequency_factor = min(1.0, signal_rate / MIN_RATE)
@@ -344,6 +420,7 @@ def compute_side_score(
     weight_sum = 0.0
     total_pivots_per_scale: list[float] = []
     per_scale_scores: dict[int, float] = {}
+    per_scale_stats: dict[int, dict[str, float]] = {}
     for N in scales:
         col = f"pivot_N{N}"
         pivots = df[col]
@@ -359,31 +436,63 @@ def compute_side_score(
             recall_sat = 1.0 - np.exp(-recall / max(target_for_scale, 1e-9))
             scale_score = (precision ** PRECISION_EXPONENT) * recall_sat
         else:
+            recall = 0.0
+            recall_sat = 0.0
             scale_score = 0.0
         per_scale_scores[N] = float(scale_score)
+        per_scale_stats[N] = {
+            "precision": precision,
+            "recall": float(recall),
+            "recall_saturated": float(recall_sat),
+            "total_pivots": total,
+        }
         weight = np.log(N) / np.log(500)
         raw_score += weight * scale_score
         weight_sum += weight
 
     normalized_raw = raw_score / weight_sum if weight_sum > 0 else 0.0
 
-    # Two-sided excess penalty (items 2 + 3). Reference is the MEDIAN of
-    # per-scale total_pivots, not the mean — the mean was dominated by
-    # small N (which produce thousands of micro-pivots).
-    sorted_totals = sorted(total_pivots_per_scale)
-    ref_pivots = sorted_totals[len(sorted_totals) // 2] if sorted_totals else 0.0
+    # Two-sided excess penalty against a STABLE reference scale (item B4).
+    # Pick REFERENCE_N if it's in the valid scale set; otherwise pick the
+    # nearest valid scale by absolute distance. This replaces the v2
+    # median selection that introduced a discontinuity when a scale
+    # dropped out of valid_scales.
+    if REFERENCE_N in scales:
+        ref_idx = scales.index(REFERENCE_N)
+    else:
+        ref_idx = min(range(len(scales)), key=lambda i: abs(scales[i] - REFERENCE_N))
+    ref_scale = scales[ref_idx]
+    ref_pivots = total_pivots_per_scale[ref_idx]
     n_eff = max(float(n_signals), 1.0)
     t_eff = max(float(ref_pivots), 1.0)
     excess_penalty = 2.0 * n_eff * t_eff / (n_eff * n_eff + t_eff * t_eff)
 
     final = float(normalized_raw * frequency_factor * excess_penalty)
     logger.debug(
-        "compute_side_score side=%s n_sig=%d rate=%.4f ff=%.3f raw=%.4f ep=%.3f ref=%.0f final=%.4f",
+        "compute_side_score side=%s n_sig=%d rate=%.4f ff=%.3f raw=%.4f ep=%.3f ref_scale=%d ref=%.0f final=%.4f",
         side, n_signals, signal_rate, frequency_factor,
-        normalized_raw, excess_penalty, ref_pivots, final,
+        normalized_raw, excess_penalty, ref_scale, ref_pivots, final,
     )
+
+    components: dict[str, float] = {
+        "precision_at_ref": float(per_scale_stats.get(ref_scale, {}).get("precision", 0.0)),
+        "recall_saturated_at_ref": float(
+            per_scale_stats.get(ref_scale, {}).get("recall_saturated", 0.0)
+        ),
+        "frequency_factor": float(frequency_factor),
+        "excess_penalty": float(excess_penalty),
+        "ref_pivots": float(ref_pivots),
+        "ref_scale": int(ref_scale),
+        "n_signals": float(n_signals),
+        "normalized_raw": float(normalized_raw),
+    }
+
+    if return_per_scale and return_components:
+        return final, per_scale_scores, components
     if return_per_scale:
         return final, per_scale_scores
+    if return_components:
+        return final, components
     return final
 
 
@@ -398,22 +507,54 @@ def _fold_score(
     sig_is: pd.Series,
     sig_oos: pd.Series,
     side: str,
-) -> float:
-    """Per-fold OOS score with smooth IS-OOS overfit penalty — Scorer v2.
+    return_components: bool = False,
+) -> Union[float, tuple[float, dict[str, float]]]:
+    """Per-fold OOS score with smooth IS-OOS overfit penalty — Scorer v2/v3.
 
     Both halves are scored on the **same** scale set (the intersection of
     scales valid on both IS and OOS), so the gap is not contaminated by
     scales that fit one half but not the other. (Item 13 — defended in
-    panel as the right hygiene, intentionally NOT changed in v2.)
+    panel as the right hygiene, intentionally NOT changed.)
 
     Item 1: exponential penalty replaces the prior subtractive clamp.
     Returns ``oos · exp(-GAMMA · max(0, is - oos))`` — always in
     ``[0, oos]``, smooth everywhere, and preserves gradient on losing
-    trials (where the old formula would return 0 and silently kill the
-    learning signal).
+    trials.
+
+    Scorer v3 (item B3): with ``return_components=True``, also returns
+    a flat dict of per-fold component metrics used by the optimiser
+    objective to set user attrs.
     """
     common_n = min(len(df_is), len(df_oos))
     scales = _valid_scales(common_n)
+    if return_components:
+        is_score, is_components = compute_side_score(
+            df_is, sig_is, side, scales=scales, return_components=True
+        )
+        oos_score, oos_components = compute_side_score(
+            df_oos, sig_oos, side, scales=scales, return_components=True
+        )
+        gap = max(0.0, float(is_score) - float(oos_score))
+        fold = float(oos_score * np.exp(-GAMMA * gap))
+        components = {
+            "is_score": float(is_score),
+            "oos_score": float(oos_score),
+            "is_oos_gap": float(gap),
+            "fold_score": fold,
+            "precision_at_ref_oos": float(oos_components["precision_at_ref"]),
+            "recall_saturated_at_ref_oos": float(
+                oos_components["recall_saturated_at_ref"]
+            ),
+            "frequency_factor_oos": float(oos_components["frequency_factor"]),
+            "excess_penalty_oos": float(oos_components["excess_penalty"]),
+            "precision_at_ref_is": float(is_components["precision_at_ref"]),
+            "recall_saturated_at_ref_is": float(
+                is_components["recall_saturated_at_ref"]
+            ),
+            "frequency_factor_is": float(is_components["frequency_factor"]),
+            "excess_penalty_is": float(is_components["excess_penalty"]),
+        }
+        return fold, components
     is_score = compute_side_score(df_is, sig_is, side, scales=scales)
     oos_score = compute_side_score(df_oos, sig_oos, side, scales=scales)
     gap = max(0.0, float(is_score) - float(oos_score))
@@ -425,9 +566,12 @@ def fold_score_high(
     df_oos: pd.DataFrame,
     sig_is: pd.Series,
     sig_oos: pd.Series,
-) -> float:
+    return_components: bool = False,
+) -> Union[float, tuple[float, dict[str, float]]]:
     """Per-fold contribution for the HIGH side study (clamped at 0)."""
-    return _fold_score(df_is, df_oos, sig_is, sig_oos, "high")
+    return _fold_score(
+        df_is, df_oos, sig_is, sig_oos, "high", return_components=return_components
+    )
 
 
 def fold_score_low(
@@ -435,9 +579,12 @@ def fold_score_low(
     df_oos: pd.DataFrame,
     sig_is: pd.Series,
     sig_oos: pd.Series,
-) -> float:
+    return_components: bool = False,
+) -> Union[float, tuple[float, dict[str, float]]]:
     """Per-fold contribution for the LOW side study (clamped at 0)."""
-    return _fold_score(df_is, df_oos, sig_is, sig_oos, "low")
+    return _fold_score(
+        df_is, df_oos, sig_is, sig_oos, "low", return_components=return_components
+    )
 
 
 # ---------------------------------------------------------------------------
