@@ -491,8 +491,9 @@ int edge_window_high = is_spx_20260523_pathA_5k_edge ? 5 : 5
 int edge_window_low = is_spx_20260523_pathA_5k_edge ? 5 : 5
 
 edge_or_state(bool v, int win, bool use_edge) =>
-    // Pine v6 has no nz(series bool, bool) overload — use na() + ternary instead.
-    bool prev = na(v[win]) ? false : v[win]
+    // Pine v6 has no nz()/na() overloads for series bool. Guard with bar_index
+    // to default to false on bars before win bars of history exist.
+    bool prev = bar_index >= win ? v[win] : false
     use_edge ? (v and not prev) : v
 
 // Hoist inline predicates so they can be edge-wrapped uniformly.
