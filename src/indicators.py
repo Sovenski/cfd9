@@ -74,6 +74,9 @@ class Params:
     har_vote_thresh_high: float = 0.15
     vola_method_high: str = "ATR"
     momentum_velocity_mode_high: str = "Reversal"
+    # V15 — edge-triggered voting (HIGH side)
+    use_edge_voting_high: bool = False
+    edge_window_high: int = 5
 
     # --- LOW side ---
     S_detect_low: int = 26
@@ -111,6 +114,9 @@ class Params:
     har_vote_thresh_low: float = 0.15
     vola_method_low: str = "ATR"
     momentum_velocity_mode_low: str = "Reversal"
+    # V15 — edge-triggered voting (LOW side)
+    use_edge_voting_low: bool = False
+    edge_window_low: int = 5
 
     # --- Fixed constants (not per-side, not optimized) ---
     baseline_lb: int = 20

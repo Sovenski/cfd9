@@ -1,7 +1,10 @@
-"""Speculatores 14.5 optimization pipeline.
+"""Speculatores 15 optimization pipeline.
 
 Script-friendly orchestration for Optuna studies, Colab-safe multiprocessing,
 and one-file Markdown exports that capture the equivalent of notebook outputs.
+
+V15 adds two new search dimensions per side — ``use_edge_voting`` and
+``edge_window`` — to match the Pine V15 edge-triggered voting semantics.
 """
 
 from __future__ import annotations
@@ -43,8 +46,8 @@ from .validation import (
 
 logger = logging.getLogger(__name__)
 
-VERSION = "Speculatores 14.5 (Path A scoring)"
-VERSION_SLUG = "speculatores_14_5_pathA"
+VERSION = "Speculatores 15 (Path A scoring, edge-triggered voting)"
+VERSION_SLUG = "speculatores_15_pathA"
 DEFAULT_RESULTS_DIR = Path("results")
 DEFAULT_STORAGE_FILE = Path("temp") / f"{VERSION_SLUG}.journal"
 DEFAULT_N_TRIALS = 500
@@ -143,6 +146,9 @@ SEED_HEURISTIC_STRUCTURAL_HIGH: dict[str, Any] = {
     "high_use_har_vol": False,
     "high_vola_method": "StdDev",
     "high_momentum_velocity_mode": "Reversal",
+    # V15 — passthrough (V14-equivalent)
+    "high_use_edge_voting": False,
+    "high_edge_window": 5,
 }
 
 SEED_HEURISTIC_STRUCTURAL_LOW: dict[str, Any] = {
@@ -181,6 +187,25 @@ SEED_HEURISTIC_STRUCTURAL_LOW: dict[str, Any] = {
     "low_use_har_vol": False,
     "low_vola_method": "ATR",
     "low_momentum_velocity_mode": "Trend",
+    # V15 — passthrough (V14-equivalent)
+    "low_use_edge_voting": False,
+    "low_edge_window": 5,
+}
+
+# V15 — Heuristic Structural seed extended with edge-triggered voting.
+# Same hyperparameters as SEED_HEURISTIC_STRUCTURAL_{HIGH,LOW} but with
+# use_edge_voting=True and edge_window=5 (matching Pine V15 Path A 5k Edge
+# preset's default window).
+SEED_HEURISTIC_STRUCTURAL_EDGE_HIGH: dict[str, Any] = {
+    **SEED_HEURISTIC_STRUCTURAL_HIGH,
+    "high_use_edge_voting": True,
+    "high_edge_window": 5,
+}
+
+SEED_HEURISTIC_STRUCTURAL_EDGE_LOW: dict[str, Any] = {
+    **SEED_HEURISTIC_STRUCTURAL_LOW,
+    "low_use_edge_voting": True,
+    "low_edge_window": 5,
 }
 
 
@@ -385,6 +410,12 @@ def params_from_trial(trial: optuna.Trial, side: str) -> Params:
         f"{s}_momentum_velocity_mode", ["Trend", "Reversal"]
     )
 
+    # V15 — edge-triggered voting search dimensions.
+    use_edge_voting = trial.suggest_categorical(
+        f"{s}_use_edge_voting", [True, False]
+    )
+    edge_window = trial.suggest_int(f"{s}_edge_window", 3, 60)
+
     kwargs_high = dict(
         S_detect_high=S_detect,
         scale_start_high=scale_start,
@@ -421,6 +452,8 @@ def params_from_trial(trial: optuna.Trial, side: str) -> Params:
         har_vote_thresh_high=har_vote_thresh,
         vola_method_high=vola_method,
         momentum_velocity_mode_high=momentum_velocity_mode,
+        use_edge_voting_high=use_edge_voting,
+        edge_window_high=edge_window,
     )
     kwargs_low = dict(
         S_detect_low=S_detect,
@@ -458,6 +491,8 @@ def params_from_trial(trial: optuna.Trial, side: str) -> Params:
         har_vote_thresh_low=har_vote_thresh,
         vola_method_low=vola_method,
         momentum_velocity_mode_low=momentum_velocity_mode,
+        use_edge_voting_low=use_edge_voting,
+        edge_window_low=edge_window,
     )
 
     base_dict = _params_fields(Params())
@@ -541,6 +576,16 @@ def _worker_entry(
         study.enqueue_trial(seed_params)
         logger.info(
             "Worker 0 seeded %s study with Heuristic Structural preset", side,
+        )
+        # V15 — also seed the Edge variant so TPE has both anchors.
+        edge_seed = (
+            SEED_HEURISTIC_STRUCTURAL_EDGE_HIGH if side == "high"
+            else SEED_HEURISTIC_STRUCTURAL_EDGE_LOW
+        )
+        study.enqueue_trial(edge_seed)
+        logger.info(
+            "Worker 0 seeded %s study with Heuristic Structural Edge preset",
+            side,
         )
     stop_cb = MaxTrialsCallback(config.trials_per_side, states=TRIAL_STATES_DONE)
     study.optimize(

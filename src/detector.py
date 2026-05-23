@@ -81,6 +81,37 @@ def _to_bool(arr: np.ndarray) -> np.ndarray:
     return result
 
 
+def _edge_or_state(
+    state: np.ndarray,
+    win: int,
+    use_edge: bool,
+) -> np.ndarray:
+    """Vectorized Pine V15 ``edge_or_state``.
+
+    When ``use_edge=False`` or ``win<=0``, returns ``state`` unchanged. When
+    ``use_edge=True``, returns ``state AND NOT state-shifted-back-by-win``.
+    The shifted region before bar ``win`` is zero-filled to mirror Pine's
+    ``bar_index >= win ? v[win] : false`` semantics — early-history bars pass
+    through as state (since prev=False → edge = state AND NOT False = state).
+
+    Args:
+        state: Boolean vote state array, shape (n,).
+        win: Edge window in bars (Pine's ``win`` parameter).
+        use_edge: When False, returns state unchanged (V14 behavior).
+
+    Returns:
+        Boolean array of effective per-bar votes, shape (n,).
+    """
+    if not use_edge or win <= 0:
+        return state.astype(bool, copy=True)
+    out = state.astype(bool, copy=True)
+    if win < len(out):
+        shifted = np.zeros_like(out)
+        shifted[win:] = out[:-win]
+        out = out & ~shifted
+    return out
+
+
 # ---------------------------------------------------------------------------
 # SpeculatorDetector
 # ---------------------------------------------------------------------------
@@ -345,6 +376,69 @@ class SpeculatorDetector:
         low_arr = low.values.astype(float)
 
         # ---------------------------------------------------------------
+        # V15 — Hoist inline vote predicates + build edge-effective arrays
+        # ---------------------------------------------------------------
+        # 7 of 8 votes per side are vectorizable here. The 8th vote per
+        # side (pivot drift) depends on the running confirmed-pivots stack
+        # and is handled inline in Phase 2.
+
+        # HIGH side hoisted predicates
+        _vol_slow_high = (
+            vol_surge_high_arr < (1.0 / p.vol_surge_thresh_high)
+        ).astype(bool)
+        _mom_div_neg_h = (mom_diverge_high_arr < 0).astype(bool)
+
+        eff_t_up_h = _edge_or_state(
+            trend_up_high_arr, p.edge_window_high, p.use_edge_voting_high,
+        )
+        eff_vs_h = _edge_or_state(
+            _vol_slow_high, p.edge_window_high, p.use_edge_voting_high,
+        )
+        eff_md_h = _edge_or_state(
+            _mom_div_neg_h, p.edge_window_high, p.use_edge_voting_high,
+        )
+        eff_mv_h = _edge_or_state(
+            mom_vel_high_ok_arr, p.edge_window_high, p.use_edge_voting_high,
+        )
+        eff_va_h = _edge_or_state(
+            vola_elevated_high_arr, p.edge_window_high, p.use_edge_voting_high,
+        )
+        eff_g_h = _edge_or_state(
+            gjr_high_vote_arr, p.edge_window_high, p.use_edge_voting_high,
+        )
+        eff_h_h = _edge_or_state(
+            har_high_vote_arr, p.edge_window_high, p.use_edge_voting_high,
+        )
+
+        # LOW side hoisted predicates
+        _vol_surge_low_ = (
+            vol_surge_low_arr > p.vol_surge_thresh_low
+        ).astype(bool)
+        _mom_div_neg_l = (mom_diverge_low_arr < 0).astype(bool)
+
+        eff_t_dn_l = _edge_or_state(
+            trend_down_low_arr, p.edge_window_low, p.use_edge_voting_low,
+        )
+        eff_vs_l = _edge_or_state(
+            _vol_surge_low_, p.edge_window_low, p.use_edge_voting_low,
+        )
+        eff_md_l = _edge_or_state(
+            _mom_div_neg_l, p.edge_window_low, p.use_edge_voting_low,
+        )
+        eff_mv_l = _edge_or_state(
+            mom_vel_low_ok_arr, p.edge_window_low, p.use_edge_voting_low,
+        )
+        eff_va_l = _edge_or_state(
+            vola_elevated_low_arr, p.edge_window_low, p.use_edge_voting_low,
+        )
+        eff_g_l = _edge_or_state(
+            gjr_low_vote_arr, p.edge_window_low, p.use_edge_voting_low,
+        )
+        eff_h_l = _edge_or_state(
+            har_low_vote_arr, p.edge_window_low, p.use_edge_voting_low,
+        )
+
+        # ---------------------------------------------------------------
         # Phase 2: Stateful bar-by-bar loop
         # ---------------------------------------------------------------
 
@@ -378,6 +472,11 @@ class SpeculatorDetector:
         out_pivot_drift_low = np.zeros(n, dtype=float)
         out_ph_confirms = np.zeros(n, dtype=float)
         out_pl_confirms = np.zeros(n, dtype=float)
+
+        # V15 — per-bar drift vote state history (only votes not vectorizable
+        # in Phase 1; needed for inline edge_or_state computation).
+        state_pd_dn_h = np.zeros(n, dtype=bool)
+        state_pd_up_l = np.zeros(n, dtype=bool)
 
         for t in range(n):
             bars_since_high += 1
@@ -413,6 +512,22 @@ class SpeculatorDetector:
             drift_up_low = drift_low > p.pivot_drift_thresh_low
             out_pivot_drift_high[t] = drift_high
             out_pivot_drift_low[t] = drift_low
+
+            # V15 — record drift vote state, compute per-bar edge value
+            state_pd_dn_h[t] = drift_down_high
+            state_pd_up_l[t] = drift_up_low
+            if (not p.use_edge_voting_high) or (t < p.edge_window_high):
+                eff_pd_dn_h_t = drift_down_high
+            else:
+                eff_pd_dn_h_t = drift_down_high and not bool(
+                    state_pd_dn_h[t - p.edge_window_high]
+                )
+            if (not p.use_edge_voting_low) or (t < p.edge_window_low):
+                eff_pd_up_l_t = drift_up_low
+            else:
+                eff_pd_up_l_t = drift_up_low and not bool(
+                    state_pd_up_l[t - p.edge_window_low]
+                )
 
             # Pine updates the confirmed pivot stack after evaluating drift.
             if not np.isnan(current_baseline_ph):
@@ -456,34 +571,26 @@ class SpeculatorDetector:
                 and bool(er_gate_ok_low_arr[t])
             )
 
-            # --- Vote counts ---
+            # --- Vote counts (V15 — uses edge-effective per-bar votes) ---
             ph_c = int(sum([
-                p.use_trend_high and bool(trend_up_high_arr[t]),
-                _USE_PIVOT_DRIFT and drift_down_high,
-                p.use_volume_high and (
-                    vol_surge_high_arr[t] < (1.0 / p.vol_surge_thresh_high)
-                ),
-                p.use_momentum_high and (mom_diverge_high_arr[t] < 0),
-                p.use_momentum_velocity_high and bool(
-                    mom_vel_high_ok_arr[t]
-                ),
-                p.use_volatility_high and bool(vola_elevated_high_arr[t]),
-                p.use_gjr_asym_high and bool(gjr_high_vote_arr[t]),
-                p.use_har_vol_high and bool(har_high_vote_arr[t]),
+                p.use_trend_high and bool(eff_t_up_h[t]),
+                _USE_PIVOT_DRIFT and eff_pd_dn_h_t,
+                p.use_volume_high and bool(eff_vs_h[t]),
+                p.use_momentum_high and bool(eff_md_h[t]),
+                p.use_momentum_velocity_high and bool(eff_mv_h[t]),
+                p.use_volatility_high and bool(eff_va_h[t]),
+                p.use_gjr_asym_high and bool(eff_g_h[t]),
+                p.use_har_vol_high and bool(eff_h_h[t]),
             ]))
             pl_c = int(sum([
-                p.use_trend_low and bool(trend_down_low_arr[t]),
-                _USE_PIVOT_DRIFT and drift_up_low,
-                p.use_volume_low and (
-                    vol_surge_low_arr[t] > p.vol_surge_thresh_low
-                ),
-                p.use_momentum_low and (mom_diverge_low_arr[t] < 0),
-                p.use_momentum_velocity_low and bool(
-                    mom_vel_low_ok_arr[t]
-                ),
-                p.use_volatility_low and bool(vola_elevated_low_arr[t]),
-                p.use_gjr_asym_low and bool(gjr_low_vote_arr[t]),
-                p.use_har_vol_low and bool(har_low_vote_arr[t]),
+                p.use_trend_low and bool(eff_t_dn_l[t]),
+                _USE_PIVOT_DRIFT and eff_pd_up_l_t,
+                p.use_volume_low and bool(eff_vs_l[t]),
+                p.use_momentum_low and bool(eff_md_l[t]),
+                p.use_momentum_velocity_low and bool(eff_mv_l[t]),
+                p.use_volatility_low and bool(eff_va_l[t]),
+                p.use_gjr_asym_low and bool(eff_g_l[t]),
+                p.use_har_vol_low and bool(eff_h_l[t]),
             ]))
             out_ph_confirms[t] = ph_c
             out_pl_confirms[t] = pl_c

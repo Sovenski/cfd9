@@ -32,7 +32,7 @@ from src.speculatores145 import (
 
 
 def parse_args() -> argparse.Namespace:
-    parser = argparse.ArgumentParser(description="Run the Speculatores 14.5 optimizer.")
+    parser = argparse.ArgumentParser(description="Run the Speculatores 15 optimizer.")
     parser.add_argument(
         "--dataset",
         required=True,
@@ -80,7 +80,7 @@ def parse_args() -> argparse.Namespace:
     )
     parser.add_argument(
         "--study-prefix",
-        default="speculatores_14_5",
+        default="speculatores_15",
         help="Study-name prefix used in Optuna storage.",
     )
     parser.add_argument(
@@ -106,7 +106,7 @@ def main() -> None:
         stability_trials=args.stability_trials,
     )
     report_path = run_full_pipeline(config)
-    print(f"Speculatores 14.5 report written to: {report_path}")
+    print(f"Speculatores 15 report written to: {report_path}")
 
 
 if __name__ == "__main__":
