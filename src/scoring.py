@@ -11,7 +11,7 @@ with the following tightenings identified by a second unprimed-panel review:
   assignment is invariant to bar-order traversal AND prefers leading
   predictions over lagging ones at equal absolute distance.
 - ``compute_side_score``: the reference for the two-sided excess penalty
-  is now the FIXED ``REFERENCE_N=50`` pivot scale (or its nearest valid
+  is now the FIXED ``REFERENCE_N=100`` pivot scale (or its nearest valid
   neighbour) instead of the median of valid scales, eliminating a
   discontinuity that fired when a scale dropped out of the valid set.
 - ``compute_side_score`` exposes a ``return_components`` kwarg that
@@ -80,13 +80,20 @@ logger = logging.getLogger(__name__)
 # Constants
 # ---------------------------------------------------------------------------
 
-PIVOT_SCALES: list[int] = [5, 10, 20, 50, 100, 200, 500]
+# Scorer v4: nested-scale structural oracle. A bar counts as a "structural
+# pivot" only when it is the centered-window extremum at ALL scales in
+# STRUCTURAL_NEST simultaneously. The scorer then evaluates against a single
+# tolerance scale (REFERENCE_N) for matching. This replaces v3's per-scale
+# mean over [5, 10, 20, 50, 100, 200, 500], which was dominated by small-scale
+# noise pivots and drove the optimizer toward minor-dip detection.
+STRUCTURAL_NEST: list[int] = [50, 100, 200]
+PIVOT_SCALES: list[int] = [100]
 MIN_RATE: float = 0.001          # 0.1% signal rate floor
 GAMMA: float = 2.0               # IS-OOS overfit penalty multiplier (Scorer v2: exponential)
 LEAD_WINDOW_CAP: int = 30        # Floor for the scale-adaptive forward TP-window cap (item 7)
 PRECISION_EXPONENT: float = 1.2  # Precision-leaning per-scale score
 RECALL_TARGET: float = 0.40      # Reference recall target (Scorer v2: scaled by sqrt(REFERENCE_N/N))
-REFERENCE_N: int = 50            # Pivot scale at which RECALL_TARGET applies unchanged (item 5)
+REFERENCE_N: int = 100           # Pivot tolerance scale at which RECALL_TARGET applies unchanged
 # Scorer v3: lead-biased tiebreak in Hungarian matching. A 1-bar lead matches
 # before a 1-bar lag at equal absolute distance (0.5 < 1.0).
 LEAD_BIAS: float = 0.5
@@ -174,13 +181,57 @@ def label_pivots(df: pd.DataFrame, N: int) -> pd.Series:
     return pd.Series(result, index=df.index, dtype=np.int8)
 
 
+def label_structural_pivots(
+    df: pd.DataFrame, nest: list[int] | None = None
+) -> pd.Series:
+    """Label structural pivots — Scorer v4 nested-scale oracle.
+
+    A bar is a structural pivot HIGH (+1) only if its high is the centered-
+    window maximum at EVERY scale in ``nest`` simultaneously. Similarly for
+    structural pivot LOW (-1). This is strictly more selective than any
+    single-scale label and matches what a human reader means by "structural"
+    — extrema that persist across multiple zoom levels.
+
+    Slices shorter than ``2*max(nest)+1`` bars yield an all-zero series
+    (no scale in the nest can be applied). Slices that support some but not
+    all scales also yield zeros, because a strict AND across the nest is
+    required.
+    """
+    if nest is None:
+        nest = STRUCTURAL_NEST
+    n_bars = len(df)
+    if not nest or n_bars < 2 * max(nest) + 1:
+        return pd.Series(np.zeros(n_bars, dtype=np.int8), index=df.index)
+
+    per_scale_labels = [label_pivots(df, N).to_numpy() for N in nest]
+    high_at_all = np.logical_and.reduce([lbl == 1 for lbl in per_scale_labels])
+    low_at_all = np.logical_and.reduce([lbl == -1 for lbl in per_scale_labels])
+    result = np.zeros(n_bars, dtype=np.int8)
+    result[high_at_all] = 1
+    result[low_at_all] = -1
+    # No need for _dedup_consecutive_runs — the nest already collapses
+    # adjacent labels by construction (a bar can only be the strict max
+    # of multiple centered windows simultaneously in isolated positions).
+    return pd.Series(result, index=df.index, dtype=np.int8)
+
+
 def add_pivot_labels(df: pd.DataFrame) -> pd.DataFrame:
-    """Add ``pivot_N{scale}`` columns for all PIVOT_SCALES to *df*."""
+    """Add structural pivot labels to *df*.
+
+    Scorer v4: writes a single column ``pivot_N{REFERENCE_N}`` containing
+    the nested-scale structural-pivot label. The column name is preserved
+    so downstream consumers (``compute_side_score``, ``precision_at_n_stats``)
+    do not need API changes — they simply iterate over ``PIVOT_SCALES =
+    [REFERENCE_N]`` and read the structural column.
+    """
     for N in PIVOT_SCALES:
         col = f"pivot_N{N}"
         if col not in df.columns:
-            df[col] = label_pivots(df, N)
-            logger.info("Added column %s", col)
+            df[col] = label_structural_pivots(df, STRUCTURAL_NEST)
+            logger.info(
+                "Added column %s (Scorer v4 structural nest %s)",
+                col, STRUCTURAL_NEST,
+            )
     return df
 
 
@@ -343,7 +394,7 @@ def compute_side_score(
       symmetrically toward 0 as either side grows much larger.
 
       Scorer v3 (item B4): the reference pivot count is now read from
-      the FIXED ``REFERENCE_N=50`` valid scale (or its nearest valid
+      the FIXED ``REFERENCE_N=100`` valid scale (or its nearest valid
       neighbour if 50 itself fits no centered window), replacing v2's
       MEDIAN-of-valid-scales selection. The median choice introduced a
       hidden discontinuity: when a slice length crossed a scale-validity
