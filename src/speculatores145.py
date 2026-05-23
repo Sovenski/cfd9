@@ -85,6 +85,7 @@ INT_BOUNDS: dict[str, tuple[int, int]] = {
     "confirm_count": (1, 5),
     "pivot_drift_lookback": (2, 20),
     "pivot_drift_confirm_bias": (0, 2),
+    "edge_window": (3, 60),
 }
 
 FLOAT_BOUNDS: dict[str, tuple[float, float]] = {
@@ -219,6 +220,7 @@ BOOL_FIELDS = [
     "use_er_gate",
     "use_gjr_asym",
     "use_har_vol",
+    "use_edge_voting",
 ]
 
 CATEGORY_FIELDS: dict[str, list[str]] = {
@@ -258,6 +260,8 @@ PINE_HIGH_PARAMS = [
     ("use_er_gate_high", "use_er_gate_high"),
     ("momentum_velocity_mode_high", "momentum_velocity_mode_high"),
     ("vola_method_high", "vola_method_high"),
+    ("use_edge_voting_high", "use_edge_voting_high"),
+    ("edge_window_high", "edge_window_high"),
 ]
 
 PINE_LOW_PARAMS = [
@@ -292,6 +296,8 @@ PINE_LOW_PARAMS = [
     ("use_er_gate_low", "use_er_gate_low"),
     ("momentum_velocity_mode_low", "momentum_velocity_mode_low"),
     ("vola_method_low", "vola_method_low"),
+    ("use_edge_voting_low", "use_edge_voting_low"),
+    ("edge_window_low", "edge_window_low"),
 ]
 
 
