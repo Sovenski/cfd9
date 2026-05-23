@@ -491,7 +491,9 @@ int edge_window_high = is_spx_20260523_pathA_5k_edge ? 5 : 5
 int edge_window_low = is_spx_20260523_pathA_5k_edge ? 5 : 5
 
 edge_or_state(bool v, int win, bool use_edge) =>
-    use_edge ? v and not nz(v[win], false) : v
+    // Pine v6 has no nz(series bool, bool) overload — use na() + ternary instead.
+    bool prev = na(v[win]) ? false : v[win]
+    use_edge ? (v and not prev) : v
 
 // Hoist inline predicates so they can be edge-wrapped uniformly.
 bool _vol_slow_high = vol_surge_high < (1.0 / vol_surge_thresh_high)
