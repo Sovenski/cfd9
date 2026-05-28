@@ -87,12 +87,6 @@ class PreparedSlice:
 Fold = list[PreparedSlice]
 
 
-def _master_span(stream_datas: list[StreamData]) -> tuple[pd.Timestamp, pd.Timestamp]:
-    starts = [sd.df.index[0] for sd in stream_datas if len(sd.df)]
-    ends = [sd.df.index[-1] for sd in stream_datas if len(sd.df)]
-    return min(starts), max(ends)
-
-
 def build_calendar_folds(
     stream_datas: list[StreamData],
     is_fraction: float = IS_FRACTION,
@@ -100,52 +94,68 @@ def build_calendar_folds(
     step_fraction: float = STEP_FRACTION,
     holdout_fraction: float = HOLDOUT_FRACTION,
 ) -> list[Fold]:
-    """Time-aligned calendar folds; each stream sliced by date per fold.
+    """Time-aligned calendar folds sized in BARS on the reference stream.
 
-    Embargo between IS and OOS is the calendar span of ``EMBARGO_NEST_BARS``
-    bars at the COARSEST selected timeframe (guards the non-causal label
-    window for every stream). Streams whose slice has < ``MIN_STREAM_BARS``
-    bars are dropped from that fold (logged).
+    The **reference stream** is the one with the most bars; all fold windows
+    are expressed as integer bar offsets on that stream and then converted to
+    date boundaries used to slice every other stream.  This avoids the
+    calendar-day sizing bug where ``OOS_FRACTION * calendar_days`` fails to
+    reach ``MIN_STREAM_BARS`` for any pool not anchored on a 155-year series.
+
+    The embargo is exactly ``EMBARGO_NEST_BARS`` reference-stream bars (fixes
+    the prior under-shooting caused by scaling ``coarsest_bar_seconds / 86400``).
+
+    Streams whose IS or OOS date-slice has < ``MIN_STREAM_BARS`` bars are
+    dropped from that fold (their data is sparser than the reference).
     """
     if not stream_datas:
         return []
-    start, end = _master_span(stream_datas)
-    total_days = max((end - start).days, 1)
-    active_days = total_days * (1.0 - holdout_fraction)
-    is_days = total_days * is_fraction
-    oos_days = total_days * oos_fraction
-    step_days = max(total_days * step_fraction, 1.0)
 
-    coarsest_bar_seconds = max(sd.bar_seconds for sd in stream_datas)
-    embargo_days = EMBARGO_NEST_BARS * coarsest_bar_seconds / 86400.0
+    # Reference stream: the one with the most bars.
+    ref = max(stream_datas, key=lambda sd: len(sd.df))
+    ref_idx = ref.df.index  # sorted DatetimeIndex
+    n = len(ref_idx)
+
+    # Bar-based sizes (mirrors src/validation.py single-asset scheme).
+    holdout_bars = int(round(n * holdout_fraction))
+    active = n - holdout_bars
+    is_bars = max(MIN_STREAM_BARS, int(round(n * is_fraction)))
+    oos_bars = max(MIN_STREAM_BARS, int(round(n * oos_fraction)))
+    step_bars = max(1, int(round(n * step_fraction)))
+    embargo_bars = EMBARGO_NEST_BARS  # true 200-bar gap
 
     folds: list[Fold] = []
-    is_start_off = 0.0
-    while is_start_off + is_days + embargo_days + oos_days <= active_days:
-        is_start = start + pd.Timedelta(days=is_start_off)
-        is_end = is_start + pd.Timedelta(days=is_days)
-        oos_start = is_end + pd.Timedelta(days=embargo_days)
-        oos_end = oos_start + pd.Timedelta(days=oos_days)
+    is_start = 0
+    while is_start + is_bars + embargo_bars + oos_bars <= active:
+        is_s = ref_idx[is_start]
+        is_e = ref_idx[is_start + is_bars]
+        oos_s = ref_idx[is_start + is_bars + embargo_bars]
+        oos_e_off = is_start + is_bars + embargo_bars + oos_bars
+        oos_e = ref_idx[oos_e_off]  # oos_e_off <= active <= n-1 by loop guard
 
         fold: Fold = []
         for sd in stream_datas:
-            df_is = sd.df.loc[(sd.df.index >= is_start) & (sd.df.index < is_end)].copy()
-            df_oos = sd.df.loc[(sd.df.index >= oos_start) & (sd.df.index < oos_end)].copy()
+            df_is = sd.df.loc[(sd.df.index >= is_s) & (sd.df.index < is_e)]
+            df_oos = sd.df.loc[(sd.df.index >= oos_s) & (sd.df.index < oos_e)]
             if len(df_is) < MIN_STREAM_BARS or len(df_oos) < MIN_STREAM_BARS:
-                continue   # nest cannot fit / too few bars → drop from this fold
-            add_pivot_labels(df_is)
-            add_pivot_labels(df_oos)
+                continue  # nest cannot fit / too few bars → drop from this fold
+            df_is_r = df_is.reset_index(drop=True)
+            df_oos_r = df_oos.reset_index(drop=True)
+            add_pivot_labels(df_is_r)
+            add_pivot_labels(df_oos_r)
             fold.append(PreparedSlice(
-                stream=sd.stream, df_is=df_is, df_oos=df_oos,
-                artifacts_is=build_detector_artifacts(df_is),
-                artifacts_oos=build_detector_artifacts(df_oos),
+                stream=sd.stream, df_is=df_is_r, df_oos=df_oos_r,
+                artifacts_is=build_detector_artifacts(df_is_r),
+                artifacts_oos=build_detector_artifacts(df_oos_r),
             ))
         if fold:
             folds.append(fold)
-        is_start_off += step_days
+        is_start += step_bars
 
-    logger.info("build_calendar_folds: %d folds over %d master days",
-                len(folds), total_days)
+    logger.info(
+        "build_calendar_folds: %d folds (ref=%s, is=%d oos=%d step=%d embargo=%d bars over %d active)",
+        len(folds), ref.stream.stream_id, is_bars, oos_bars, step_bars, embargo_bars, active,
+    )
     return folds
 
 

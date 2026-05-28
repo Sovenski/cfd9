@@ -48,7 +48,7 @@ def test_volume_policy_required_drops_volumeless_stream(tmp_path):
     assert kept is False     # 'none' quality → excluded under volume_required
 
 
-from src.pooled_validation import StreamData, build_calendar_folds
+from src.pooled_validation import StreamData, build_calendar_folds, MIN_STREAM_BARS
 from src.scoring import add_pivot_labels
 
 
@@ -64,7 +64,7 @@ def _stream_data(tmp_path, ticker, n, start_ts, step, cluster):
 
 def test_calendar_folds_respect_holdout_and_embargo(tmp_path):
     # Two daily streams, different start dates, both long enough for many folds.
-    # 15000 daily bars → OOS 3% of master span ~= 450 bars >= MIN_STREAM_BARS (401).
+    # 15000 daily bars → is=1500, oos=450 bars >= MIN_STREAM_BARS (401).
     a = _stream_data(tmp_path, "SPX", 15000, 1262304000, 86400, "US_EQ")  # 2010+
     b = _stream_data(tmp_path, "DAX", 4000, 1420070400, 86400, "EU_EQ")  # 2015+
     folds = build_calendar_folds([a, b])
@@ -72,11 +72,8 @@ def test_calendar_folds_respect_holdout_and_embargo(tmp_path):
     for fold in folds:
         for sl in fold:
             # min-bars gate: every contributing slice clears the nest requirement
-            assert len(sl.df_is) >= 1   # labels exist; emptiness handled by gate
-        # IS end strictly precedes OOS start by >= embargo for each slice
-        for sl in fold:
-            if len(sl.df_is) and len(sl.df_oos):
-                assert sl.df_is.index[-1] < sl.df_oos.index[0]
+            assert len(sl.df_is) >= MIN_STREAM_BARS
+            assert len(sl.df_oos) >= MIN_STREAM_BARS
 
 
 def test_calendar_folds_drop_too_short_streams(tmp_path):
@@ -88,6 +85,32 @@ def test_calendar_folds_drop_too_short_streams(tmp_path):
     tickers_used = {sl.stream.ticker for fold in folds for sl in fold}
     assert "DAX" not in tickers_used
     assert "SPX" in tickers_used
+
+
+def test_calendar_folds_form_on_short_pool(tmp_path):
+    """B1 regression: short pools (~3000 bars, no 155-year anchor) must form >= 1 fold.
+
+    Under the old calendar-day scheme, OOS_FRACTION * calendar_days ≈ 248 days
+    which yields ~248 trading bars — below MIN_STREAM_BARS (401) — so 0 folds
+    were produced.  The bar-based scheme sizes OOS off the reference stream
+    (3000 * 0.03 = 90, max'd to MIN_STREAM_BARS = 401) and must form at least
+    one fold; every contributing slice must have IS >= 401 and OOS >= 401.
+    """
+    a = _stream_data(tmp_path, "SPX", 3000, 1262304000, 86400, "US_EQ")
+    b = _stream_data(tmp_path, "DAX", 3000, 1262304000, 86400, "EU_EQ")
+    folds = build_calendar_folds([a, b])
+    assert len(folds) >= 1, (
+        f"Expected >= 1 fold from 3000-bar pool but got 0 "
+        f"(bar-based sizing must floor to MIN_STREAM_BARS)"
+    )
+    for fold in folds:
+        for sl in fold:
+            assert len(sl.df_is) >= MIN_STREAM_BARS, (
+                f"IS slice too short: {len(sl.df_is)} < {MIN_STREAM_BARS}"
+            )
+            assert len(sl.df_oos) >= MIN_STREAM_BARS, (
+                f"OOS slice too short: {len(sl.df_oos)} < {MIN_STREAM_BARS}"
+            )
 
 
 import optuna

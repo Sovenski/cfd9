@@ -54,7 +54,7 @@ def pooled_side_score(
     if w_nsig <= 0 or w_bars <= 0:
         return 0.0, empty
 
-    precision = (w_tp / w_nsig) if w_nsig > 0 else 0.0
+    precision = w_tp / w_nsig
     recall = (w_matched / w_total) if w_total > 0 else 0.0
     # Single scale → target_for_scale = RECALL_TARGET * sqrt(REFERENCE_N/REFERENCE_N).
     recall_sat = 1.0 - np.exp(-recall / max(RECALL_TARGET, 1e-9)) if precision > 0 else 0.0
