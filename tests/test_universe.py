@@ -1,7 +1,9 @@
 from pathlib import Path
 
+import pytest
+
 from src.universe import (
-    Stream, UNIVERSE, TIMEFRAMES, CLUSTER_MAP, resolve_streams,
+    Stream, UNIVERSE, TIMEFRAMES, CLUSTER_MAP, resolve_streams, parse_tv_filename,
 )
 
 
@@ -35,3 +37,31 @@ def test_resolve_streams_skips_missing(tmp_path, caplog):
     )
     # Only SPX_1D exists; SPX_1W is absent and silently skipped.
     assert [(s.ticker, s.timeframe) for s in streams] == [("SPX", "1D")]
+
+
+# ---------------------------------------------------------------------------
+# New tests: TV-filename parser
+# ---------------------------------------------------------------------------
+
+def test_parse_tv_filename():
+    assert parse_tv_filename("BATS_AAPL, 1D_9f4ab.csv") == ("AAPL", "1D")
+    assert parse_tv_filename("COMEX_DL_GC1!, 240_2d42d.csv") == ("GC1", "240")
+    assert parse_tv_filename("SP_SPX, 60_d2f5a.csv") == ("SPX", "60")
+    assert parse_tv_filename("NASDAQ_DLY_NDX, 1_x.csv") == ("NDX", "1m")
+    assert parse_tv_filename("garbage.csv") is None
+
+
+def test_resolve_streams_reads_tv_filenames(tmp_path):
+    # Write TV-style empty CSV files.
+    (tmp_path / "BATS_AAPL, 1D_a.csv").write_text("time,open,high,low,close,volume\n")
+    (tmp_path / "SP_SPX, 1D_b.csv").write_text("time,open,high,low,close,volume\n")
+    streams = resolve_streams(
+        groups=["G"], timeframes=["1D"], data_dir=str(tmp_path),
+        universe={"G": ["AAPL", "SPX"]},
+        cluster_map={"AAPL": "US_EQ", "SPX": "US_EQ"},
+    )
+    assert len(streams) == 2
+    tickers = {s.ticker for s in streams}
+    assert tickers == {"AAPL", "SPX"}
+    assert all(s.timeframe == "1D" for s in streams)
+    assert all(Path(s.path).exists() for s in streams)
