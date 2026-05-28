@@ -59,3 +59,43 @@ def test_search_space_is_frozen():
     except dataclasses.FrozenInstanceError:
         raised = True
     assert raised
+
+
+import optuna
+
+
+def _trial_distributions(side: str):
+    """Run one no-op trial and return the recorded Optuna distributions."""
+    optuna.logging.set_verbosity(optuna.logging.WARNING)
+    from src.speculatores145 import params_from_trial
+
+    def _objective(trial):
+        params_from_trial(trial, side)
+        return 0.0
+
+    study = optuna.create_study()
+    study.optimize(_objective, n_trials=1)
+    return study.trials[0].distributions
+
+
+def test_high_floor_relaxed_in_actual_sampling():
+    dists = _trial_distributions("high")
+    assert dists["high_dur_extreme_pct"].low == 0.30
+    assert dists["high_pct_extreme"].low == 0.55
+
+
+def test_low_floor_unchanged_in_actual_sampling():
+    dists = _trial_distributions("low")
+    assert dists["low_dur_extreme_pct"].low == 0.50
+    assert dists["low_pct_extreme"].low == 0.70
+
+
+def test_trial_keys_unchanged_for_journal_compatibility():
+    dists = _trial_distributions("high")
+    # The historical short key must still be emitted (TPE warm-start).
+    assert "high_pivot_drift_lb" in dists
+    assert "high_pivot_drift_lookback" not in dists
+    # Spot-check a few other historical keys still exist.
+    for key in ("high_S_detect", "high_min_agreement", "high_use_volume",
+                "high_vola_method", "high_edge_window"):
+        assert key in dists
