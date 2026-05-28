@@ -689,7 +689,9 @@ def _stream_data(tmp_path, ticker, n, start_ts, step, cluster):
 
 def test_calendar_folds_respect_holdout_and_embargo(tmp_path):
     # Two daily streams, different start dates, both long enough for many folds.
-    a = _stream_data(tmp_path, "SPX", 6000, 1262304000, 86400, "US_EQ")  # 2010+
+    # NOTE: streams must be large enough that OOS (3% of master span in calendar
+    # days) >= MIN_STREAM_BARS=401, else the strict gate yields 0 folds.
+    a = _stream_data(tmp_path, "SPX", 15000, 1262304000, 86400, "US_EQ")  # 2010+
     b = _stream_data(tmp_path, "DAX", 4000, 1420070400, 86400, "EU_EQ")  # 2015+
     folds = build_calendar_folds([a, b])
     assert len(folds) >= 3
@@ -705,7 +707,7 @@ def test_calendar_folds_respect_holdout_and_embargo(tmp_path):
 
 def test_calendar_folds_drop_too_short_streams(tmp_path):
     # A 1W-like coarse stream too short to fit the 401-bar nest in any fold.
-    big = _stream_data(tmp_path, "SPX", 6000, 1262304000, 86400, "US_EQ")
+    big = _stream_data(tmp_path, "SPX", 15000, 1262304000, 86400, "US_EQ")
     tiny = _stream_data(tmp_path, "DAX", 120, 1420070400, 604800, "EU_EQ")  # 120 weekly bars
     folds = build_calendar_folds([big, tiny])
     # tiny never satisfies MIN_STREAM_BARS (401) in any fold slice.
