@@ -10,13 +10,13 @@ from datetime import datetime
 ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(ROOT))
 
-# --- settings cell (DATA_DIR -> local repo data/raw; RUNS_DIR -> temp) ---
-DATA_DIR = ROOT / "data" / "raw"
+# --- settings cell (DATA_DIR -> real raw_v16; RUNS_DIR -> temp) ---
+DATA_DIR = ROOT / "data" / "raw_v16"
 RUNS_DIR = Path(tempfile.mkdtemp(prefix="v16runs_"))
-SELECTED_GROUPS = ["INDICES_US", "INDICES_GLOBAL"]
+SELECTED_GROUPS = ["INDICES", "COMMODITIES", "WORLD_ETF", "FX"]
 SELECTED_TIMEFRAMES = ["1D"]
 VOLUME_POLICY = "price_only"
-N_TRIALS = 3
+N_TRIALS = 2
 SEED = 42
 RUN_SLUG = f"v16val_{datetime.now():%Y%m%d_%H%M%S}"
 

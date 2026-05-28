@@ -25,14 +25,17 @@ and **no detector changes** (so the Pine indicator stays in parity):
 cells 9–13 are the **legacy v15 single-asset** runner, demoted below a divider (optional,
 not part of v16).
 
-1. Put TV daily exports in **Google Drive** at `MyDrive/cfd9/data/raw/` named
-   `{TICKER}_{TF}_*.csv` (e.g. `SPX_1D_*.csv`, `NDX_1D_*.csv`, `DAX_1D_*.csv`, …). The repo's
-   own `data/` is untracked, so a fresh Colab clone has none — the notebook reads the Drive
-   dir (`DATA_DIR`), not the repo. The loader auto-lowercases columns and parses Unix `time`.
+1. Put TV exports in **Google Drive** at `MyDrive/cfd9/data/raw_v16/`. **TV-native
+   filenames work as-is** — no renaming (`resolve_streams` parses `BATS_AAPL, 1D_….csv`,
+   `SP_SPX, 240_….csv`, `COMEX_DL_GC1!, 1D_….csv`, etc.). The repo's own `data/` is
+   untracked, so a fresh Colab clone has none — the notebook reads the Drive dir (`DATA_DIR`).
 2. Run **cell 1** (mount Drive) → **cell 2** (clone/update repo + install).
 3. **Cell 3 — run settings** (defaults):
-   - `SELECTED_GROUPS = ["INDICES_US", "INDICES_GLOBAL"]`  (SPX, NDX, DJI, RUT, DAX, NI225, UKX)
-   - `SELECTED_TIMEFRAMES = ["1D"]`
+   - `SELECTED_GROUPS = ["INDICES", "COMMODITIES", "WORLD_ETF", "FX"]`  (broad multi-cluster
+     1D pool — ~16 streams across 5 independent clusters: US_EQ, EU_EQ, WORLD_EQ, METALS, FX).
+     Other groups: `STOCKS` (30 US large-caps, adds events but no new cluster), or just
+     `["INDICES"]` (SPX/NDX/DAX — thinner, ~2 pivots/fold). `src.universe.UNIVERSE` lists all.
+   - `SELECTED_TIMEFRAMES = ["1D"]`  (240/60 also available for an intraday/scale-invariance run)
    - `VOLUME_POLICY = "price_only"`  (robust default; volume adds nothing to HIGH, raw index
      daily volume is unreliable — use `volume_required` only for LOW-side volume experiments)
    - `N_TRIALS = 250`  (per side)
