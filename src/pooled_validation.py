@@ -147,3 +147,78 @@ def build_calendar_folds(
     logger.info("build_calendar_folds: %d folds over %d master days",
                 len(folds), total_days)
     return folds
+
+
+def cluster_weights(streams: list[Stream]) -> dict[str, float]:
+    """Map stream_id -> 1 / (number of streams sharing its cluster)."""
+    sizes: dict[str, int] = {}
+    for s in streams:
+        sizes[s.cluster_id] = sizes.get(s.cluster_id, 0) + 1
+    return {s.stream_id: 1.0 / sizes[s.cluster_id] for s in streams}
+
+
+def _stream_stat(
+    df: pd.DataFrame, signals: pd.Series, side: str, weight: float,
+) -> StreamStat:
+    stats = precision_at_n_stats(signals, df[f"pivot_N{REFERENCE_N}"], side, REFERENCE_N)
+    return StreamStat(
+        n_signals=int(stats["n_signals"]),
+        tp=int(stats["tp"]),
+        matched_pivots=int(stats["matched_pivots"]),
+        total_pivots=int(stats["total_pivots"]),
+        n_bars=len(df),
+        weight=weight,
+    )
+
+
+def evaluate_pooled_fold(
+    params: Params, side: str, fold: Fold, weights: dict[str, float],
+) -> tuple[float, dict[str, float]]:
+    """Run the detector per stream in a fold and return the pooled fold score."""
+    sig_key = "signal_high" if side == "high" else "signal_low"
+    is_stats: list[StreamStat] = []
+    oos_stats: list[StreamStat] = []
+    for sl in fold:
+        w = weights.get(sl.stream.stream_id, 1.0)
+        det_is = SpeculatorDetector(sl.df_is, params, sl.artifacts_is).run()
+        det_oos = SpeculatorDetector(sl.df_oos, params, sl.artifacts_oos).run()
+        is_stats.append(_stream_stat(sl.df_is, det_is[sig_key], side, w))
+        oos_stats.append(_stream_stat(sl.df_oos, det_oos[sig_key], side, w))
+    return pooled_fold_score(is_stats, oos_stats, side)
+
+
+def build_pooled_optuna_objective(
+    folds: list[Fold],
+    streams: list[Stream],
+    params_from_trial: Callable[[optuna.Trial, str], Params],
+    side: str,
+) -> Callable[[optuna.Trial], float]:
+    """Pooled multi-asset objective: bootstrap-LCB over pooled fold scores.
+
+    Within-fold correlated streams are neutralised by 1/cluster_size weighting
+    in ``pooled_side_score``; temporal overlap between adjacent folds is handled
+    by the block bootstrap (block_len=2), same as the single-asset objective.
+    """
+    if side not in ("high", "low"):
+        raise ValueError(f"side must be 'high' or 'low', got {side!r}")
+    if not folds:
+        raise ValueError("No calendar folds constructed.")
+    weights = cluster_weights(streams)
+
+    def objective(trial: optuna.Trial) -> float:
+        params = params_from_trial(trial, side)
+        fold_scores: list[float] = []
+        for fold_idx, fold in enumerate(folds):
+            score, _components = evaluate_pooled_fold(params, side, fold, weights)
+            fold_scores.append(score)
+            running_lcb = fold_scores_bootstrap_ci(
+                fold_scores, n_boot=1000, alpha=0.10, block_len=2
+            )[0]
+            trial.report(running_lcb, fold_idx)
+            if trial.should_prune():
+                raise optuna.exceptions.TrialPruned()
+        return float(fold_scores_bootstrap_ci(
+            fold_scores, n_boot=1000, alpha=0.10, block_len=2
+        )[0])
+
+    return objective

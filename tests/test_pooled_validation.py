@@ -88,3 +88,33 @@ def test_calendar_folds_drop_too_short_streams(tmp_path):
     tickers_used = {sl.stream.ticker for fold in folds for sl in fold}
     assert "DAX" not in tickers_used
     assert "SPX" in tickers_used
+
+
+import optuna
+from src.pooled_validation import (
+    cluster_weights, evaluate_pooled_fold, build_pooled_optuna_objective,
+)
+from src.indicators import Params
+
+
+def test_cluster_weights_are_inverse_cluster_size():
+    a = Stream("SPX", "1D", "p", "US_EQ")
+    b = Stream("NDX", "1D", "p", "US_EQ")
+    c = Stream("DAX", "1D", "p", "EU_EQ")
+    w = cluster_weights([a, b, c])
+    assert abs(w["SPX_1D"] - 0.5) < 1e-9   # US_EQ has 2 members
+    assert abs(w["NDX_1D"] - 0.5) < 1e-9
+    assert abs(w["DAX_1D"] - 1.0) < 1e-9   # EU_EQ has 1
+
+
+def test_pooled_objective_runs_and_returns_float(tmp_path):
+    optuna.logging.set_verbosity(optuna.logging.WARNING)
+    a = _stream_data(tmp_path, "SPX", 15000, 1262304000, 86400, "US_EQ")
+    b = _stream_data(tmp_path, "DAX", 15000, 1262304000, 86400, "EU_EQ")
+    folds = build_calendar_folds([a, b])
+    from src.speculatores145 import params_from_trial
+    objective = build_pooled_optuna_objective(folds, [a.stream, b.stream],
+                                              params_from_trial, "low")
+    study = optuna.create_study(direction="maximize")
+    study.optimize(objective, n_trials=2)
+    assert isinstance(study.best_value, float)
