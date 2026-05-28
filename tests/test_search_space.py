@@ -99,3 +99,30 @@ def test_trial_keys_unchanged_for_journal_compatibility():
     for key in ("high_S_detect", "high_min_agreement", "high_use_volume",
                 "high_vola_method", "high_edge_window"):
         assert key in dists
+
+
+import random
+
+
+def test_global_sampler_respects_high_relaxed_floor():
+    from src.speculatores145 import _sample_global_params
+
+    rng = random.Random(0)
+    saw_below_050 = False
+    for _ in range(400):
+        p = _sample_global_params("high", rng)
+        if p.dur_extreme_pct_high < 0.50:
+            saw_below_050 = True
+            break
+    # HIGH floor is 0.30, so values below 0.50 must be reachable.
+    assert saw_below_050
+
+
+def test_global_sampler_keeps_low_floor():
+    from src.speculatores145 import _sample_global_params
+
+    rng = random.Random(0)
+    for _ in range(400):
+        p = _sample_global_params("low", rng)
+        # LOW floor stays 0.50 — never below.
+        assert p.dur_extreme_pct_low >= 0.50

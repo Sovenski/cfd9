@@ -702,23 +702,24 @@ def _mutate_local_param(
     rng: random.Random,
     value: Any,
     field_name: str,
+    space: SearchSpace,
 ) -> Any:
-    if field_name in INT_BOUNDS:
-        low, high = INT_BOUNDS[field_name]
+    if field_name in space.int_bounds:
+        low, high = space.int_bounds[field_name]
         radius = max(1, int(round((high - low) * 0.1)))
         local_low = max(low, int(value) - radius)
         local_high = min(high, int(value) + radius)
         return rng.randint(local_low, local_high)
-    if field_name in FLOAT_BOUNDS:
-        low, high = FLOAT_BOUNDS[field_name]
+    if field_name in space.float_bounds:
+        low, high = space.float_bounds[field_name]
         radius = (high - low) * 0.1
         local_low = max(low, float(value) - radius)
         local_high = min(high, float(value) + radius)
         return rng.uniform(local_low, local_high)
-    if field_name in BOOL_FIELDS:
+    if field_name in space.bool_fields:
         return value if rng.random() < 0.85 else (not bool(value))
-    if field_name in CATEGORY_FIELDS:
-        choices = CATEGORY_FIELDS[field_name]
+    if field_name in space.category_fields:
+        choices = space.category_fields[field_name]
         if rng.random() < 0.85:
             return value
         alternatives = [choice for choice in choices if choice != value]
@@ -731,12 +732,19 @@ def _sample_local_params(
     side: str,
     rng: random.Random,
 ) -> Params:
+    space = space_for(side)
     base_dict = _params_fields(Params())
     current = _params_fields(params)
     overrides: dict[str, Any] = {}
-    for field_name in list(INT_BOUNDS) + list(FLOAT_BOUNDS) + BOOL_FIELDS + list(CATEGORY_FIELDS):
+    field_names = (
+        list(space.int_bounds) + list(space.float_bounds)
+        + list(space.bool_fields) + list(space.category_fields)
+    )
+    for field_name in field_names:
         side_field = f"{field_name}_{side}"
-        overrides[side_field] = _mutate_local_param(rng, current[side_field], field_name)
+        overrides[side_field] = _mutate_local_param(
+            rng, current[side_field], field_name, space
+        )
     return Params(**{**base_dict, **overrides})
 
 
@@ -746,21 +754,21 @@ def _sample_global_params(
 ) -> Params:
     """Uniform global restart sampler — Scorer v2 item 11.
 
-    Draws each int/float field uniformly from its declared bounds, each
-    bool 50/50, and each categorical uniformly. Used by
-    ``summarize_stability`` to compare the local basin around a winner
-    against the wider search space.
+    Draws each int/float field uniformly from its per-side bounds, each bool
+    50/50, each categorical uniformly. Used by ``summarize_stability`` to
+    compare the local basin around a winner against the wider search space.
     """
+    space = space_for(side)
     base_dict = _params_fields(Params())
     overrides: dict[str, Any] = {}
-    for field_name, (low, high) in INT_BOUNDS.items():
+    for field_name, (low, high) in space.int_bounds.items():
         overrides[f"{field_name}_{side}"] = rng.randint(low, high)
-    for field_name, (low, high) in FLOAT_BOUNDS.items():
+    for field_name, (low, high) in space.float_bounds.items():
         overrides[f"{field_name}_{side}"] = rng.uniform(low, high)
-    for field_name in BOOL_FIELDS:
+    for field_name in space.bool_fields:
         overrides[f"{field_name}_{side}"] = bool(rng.random() < 0.5)
-    for field_name, choices in CATEGORY_FIELDS.items():
-        overrides[f"{field_name}_{side}"] = rng.choice(choices)
+    for field_name, choices in space.category_fields.items():
+        overrides[f"{field_name}_{side}"] = rng.choice(list(choices))
     return Params(**{**base_dict, **overrides})
 
 
