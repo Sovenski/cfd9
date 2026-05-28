@@ -45,14 +45,7 @@ from .validation import (
     temporal_split,
     walk_forward_folds,
 )
-from .search_space import (
-    INT_BOUNDS,
-    FLOAT_BOUNDS,
-    BOOL_FIELDS,
-    CATEGORY_FIELDS,
-    SearchSpace,
-    space_for,
-)
+from .search_space import SearchSpace, space_for
 
 logger = logging.getLogger(__name__)
 
