@@ -855,8 +855,9 @@ def test_cluster_weights_are_inverse_cluster_size():
 
 def test_pooled_objective_runs_and_returns_float(tmp_path):
     optuna.logging.set_verbosity(optuna.logging.WARNING)
-    a = _stream_data(tmp_path, "SPX", 6000, 1262304000, 86400, "US_EQ")
-    b = _stream_data(tmp_path, "DAX", 6000, 1262304000, 86400, "EU_EQ")
+    # 15000 bars so OOS (3% of master span) >= MIN_STREAM_BARS=401 → folds form.
+    a = _stream_data(tmp_path, "SPX", 15000, 1262304000, 86400, "US_EQ")
+    b = _stream_data(tmp_path, "DAX", 15000, 1262304000, 86400, "EU_EQ")
     folds = build_calendar_folds([a, b])
     from src.speculatores145 import params_from_trial
     objective = build_pooled_optuna_objective(folds, [a.stream, b.stream],
