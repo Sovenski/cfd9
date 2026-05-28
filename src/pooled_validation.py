@@ -21,7 +21,7 @@ from .scoring import (
 )
 from .universe import Stream
 from .validation import fold_scores_bootstrap_ci, load_data
-from .volume_quality import VolumeQuality, profile_volume
+from .volume_quality import REAL_FLOOR, VolumeQuality, profile_volume
 
 logger = logging.getLogger(__name__)
 
@@ -58,7 +58,7 @@ def apply_volume_policy(
         # the first bar where volume is actually above the real floor so the
         # slice never starts on a straggler placeholder bar.
         candidate = df.loc[df.index >= vq.real_from]
-        real_mask = candidate["volume"] >= 100_000
+        real_mask = candidate["volume"] >= REAL_FLOOR
         if not real_mask.any():
             return df, False
         first_real = candidate.index[real_mask.to_numpy().argmax()]

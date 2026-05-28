@@ -17,7 +17,8 @@ logger = logging.getLogger(__name__)
 
 # Bar-seconds placeholders TV emits for volume-less intraday history.
 _PLACEHOLDER_VALUES = {0, 2400, 3596, 3597, 3598, 3599, 3600, 3601}
-_REAL_FLOOR = 100_000          # below this is treated as non-real for an index/stock
+REAL_FLOOR = 100_000           # below this is treated as non-real for an index/stock
+_REAL_FLOOR = REAL_FLOOR       # backward-compat alias
 _REAL_SHARE_THRESHOLD = 0.05   # a window is "real" when <5% of bars are placeholder
 
 
