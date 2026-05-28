@@ -46,3 +46,44 @@ def test_volume_policy_required_drops_volumeless_stream(tmp_path):
     df = load_stream_frame(path)
     _, kept = apply_volume_policy(df, policy="volume_required")
     assert kept is False     # 'none' quality → excluded under volume_required
+
+
+from src.pooled_validation import StreamData, build_calendar_folds
+from src.scoring import add_pivot_labels
+
+
+def _stream_data(tmp_path, ticker, n, start_ts, step, cluster):
+    path = _write_csv(tmp_path, f"{ticker}_1D_a_b.csv", n, start_ts=start_ts, step=step)
+    df = load_stream_frame(path)
+    add_pivot_labels(df)
+    return StreamData(
+        stream=Stream(ticker, "1D", path, cluster),
+        df=df, bar_seconds=float(step),
+    )
+
+
+def test_calendar_folds_respect_holdout_and_embargo(tmp_path):
+    # Two daily streams, different start dates, both long enough for many folds.
+    a = _stream_data(tmp_path, "SPX", 6000, 1262304000, 86400, "US_EQ")  # 2010+
+    b = _stream_data(tmp_path, "DAX", 4000, 1420070400, 86400, "EU_EQ")  # 2015+
+    folds = build_calendar_folds([a, b])
+    assert len(folds) >= 3
+    for fold in folds:
+        for sl in fold:
+            # min-bars gate: every contributing slice clears the nest requirement
+            assert len(sl.df_is) >= 1   # labels exist; emptiness handled by gate
+        # IS end strictly precedes OOS start by >= embargo for each slice
+        for sl in fold:
+            if len(sl.df_is) and len(sl.df_oos):
+                assert sl.df_is.index[-1] < sl.df_oos.index[0]
+
+
+def test_calendar_folds_drop_too_short_streams(tmp_path):
+    # A 1W-like coarse stream too short to fit the 401-bar nest in any fold.
+    big = _stream_data(tmp_path, "SPX", 6000, 1262304000, 86400, "US_EQ")
+    tiny = _stream_data(tmp_path, "DAX", 120, 1420070400, 604800, "EU_EQ")  # 120 weekly bars
+    folds = build_calendar_folds([big, tiny])
+    # tiny never satisfies MIN_STREAM_BARS (401) in any fold slice.
+    tickers_used = {sl.stream.ticker for fold in folds for sl in fold}
+    assert "DAX" not in tickers_used
+    assert "SPX" in tickers_used

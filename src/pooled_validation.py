@@ -64,3 +64,86 @@ def apply_volume_policy(
         first_real = candidate.index[real_mask.to_numpy().argmax()]
         return df.loc[df.index >= first_real].copy(), True
     raise ValueError(f"unknown volume policy {policy!r}")
+
+
+@dataclasses.dataclass
+class StreamData:
+    """A loaded, labelled stream plus its bar spacing (seconds)."""
+    stream: Stream
+    df: pd.DataFrame          # full, pivot-labelled, DatetimeIndex
+    bar_seconds: float
+
+
+@dataclasses.dataclass
+class PreparedSlice:
+    stream: Stream
+    df_is: pd.DataFrame
+    df_oos: pd.DataFrame
+    artifacts_is: object
+    artifacts_oos: object
+
+
+# One fold = the list of per-stream prepared slices for that calendar window.
+Fold = list[PreparedSlice]
+
+
+def _master_span(stream_datas: list[StreamData]) -> tuple[pd.Timestamp, pd.Timestamp]:
+    starts = [sd.df.index[0] for sd in stream_datas if len(sd.df)]
+    ends = [sd.df.index[-1] for sd in stream_datas if len(sd.df)]
+    return min(starts), max(ends)
+
+
+def build_calendar_folds(
+    stream_datas: list[StreamData],
+    is_fraction: float = IS_FRACTION,
+    oos_fraction: float = OOS_FRACTION,
+    step_fraction: float = STEP_FRACTION,
+    holdout_fraction: float = HOLDOUT_FRACTION,
+) -> list[Fold]:
+    """Time-aligned calendar folds; each stream sliced by date per fold.
+
+    Embargo between IS and OOS is the calendar span of ``EMBARGO_NEST_BARS``
+    bars at the COARSEST selected timeframe (guards the non-causal label
+    window for every stream). Streams whose slice has < ``MIN_STREAM_BARS``
+    bars are dropped from that fold (logged).
+    """
+    if not stream_datas:
+        return []
+    start, end = _master_span(stream_datas)
+    total_days = max((end - start).days, 1)
+    active_days = total_days * (1.0 - holdout_fraction)
+    is_days = total_days * is_fraction
+    oos_days = total_days * oos_fraction
+    step_days = max(total_days * step_fraction, 1.0)
+
+    coarsest_bar_seconds = max(sd.bar_seconds for sd in stream_datas)
+    embargo_days = EMBARGO_NEST_BARS * coarsest_bar_seconds / 86400.0
+
+    folds: list[Fold] = []
+    is_start_off = 0.0
+    while is_start_off + is_days + embargo_days + oos_days <= active_days:
+        is_start = start + pd.Timedelta(days=is_start_off)
+        is_end = is_start + pd.Timedelta(days=is_days)
+        oos_start = is_end + pd.Timedelta(days=embargo_days)
+        oos_end = oos_start + pd.Timedelta(days=oos_days)
+
+        fold: Fold = []
+        for sd in stream_datas:
+            df_is = sd.df.loc[(sd.df.index >= is_start) & (sd.df.index < is_end)].copy()
+            df_oos = sd.df.loc[(sd.df.index >= oos_start) & (sd.df.index < oos_end)].copy()
+            if len(df_is) < MIN_STREAM_BARS or len(df_oos) < 1:
+                continue   # IS must fit the full nest; OOS must exist
+            add_pivot_labels(df_is)
+            add_pivot_labels(df_oos)
+            fold.append(PreparedSlice(
+                stream=sd.stream, df_is=df_is, df_oos=df_oos,
+                artifacts_is=build_detector_artifacts(df_is),
+                artifacts_oos=build_detector_artifacts(df_oos),
+            ))
+        if fold:
+            folds.append(fold)
+        is_start_off += step_days
+
+    logger.info("build_calendar_folds: %d folds over %d master days",
+                len(folds), total_days)
+    return folds
