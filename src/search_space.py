@@ -11,6 +11,7 @@ existing journals and TPE warm-start continue to parse — notably the historica
 """
 from __future__ import annotations
 
+import types
 from dataclasses import dataclass, field
 from typing import Mapping
 
@@ -90,11 +91,11 @@ def _freeze_categories(cats: dict[str, list[str]]) -> dict[str, tuple[str, ...]]
 
 
 LOW_SPACE = SearchSpace(
-    int_bounds=dict(INT_BOUNDS),
-    float_bounds=dict(FLOAT_BOUNDS),
+    int_bounds=types.MappingProxyType(dict(INT_BOUNDS)),
+    float_bounds=types.MappingProxyType(dict(FLOAT_BOUNDS)),
     bool_fields=tuple(BOOL_FIELDS),
-    category_fields=_freeze_categories(CATEGORY_FIELDS),
-    trial_key_overrides=dict(_TRIAL_KEY_OVERRIDES),
+    category_fields=types.MappingProxyType(_freeze_categories(CATEGORY_FIELDS)),
+    trial_key_overrides=types.MappingProxyType(dict(_TRIAL_KEY_OVERRIDES)),
 )
 
 # HIGH: identical to LOW except two relaxed floors (spec §3).
@@ -103,11 +104,11 @@ _HIGH_FLOAT_BOUNDS["dur_extreme_pct"] = (0.30, 0.99)
 _HIGH_FLOAT_BOUNDS["pct_extreme"] = (0.55, 0.99)
 
 HIGH_SPACE = SearchSpace(
-    int_bounds=dict(INT_BOUNDS),
-    float_bounds=_HIGH_FLOAT_BOUNDS,
+    int_bounds=types.MappingProxyType(dict(INT_BOUNDS)),
+    float_bounds=types.MappingProxyType(_HIGH_FLOAT_BOUNDS),
     bool_fields=tuple(BOOL_FIELDS),
-    category_fields=_freeze_categories(CATEGORY_FIELDS),
-    trial_key_overrides=dict(_TRIAL_KEY_OVERRIDES),
+    category_fields=types.MappingProxyType(_freeze_categories(CATEGORY_FIELDS)),
+    trial_key_overrides=types.MappingProxyType(dict(_TRIAL_KEY_OVERRIDES)),
 )
 
 
