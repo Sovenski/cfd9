@@ -45,6 +45,14 @@ from .validation import (
     temporal_split,
     walk_forward_folds,
 )
+from .search_space import (
+    INT_BOUNDS,
+    FLOAT_BOUNDS,
+    BOOL_FIELDS,
+    CATEGORY_FIELDS,
+    SearchSpace,
+    space_for,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -84,37 +92,6 @@ INSTRUMENTS: dict[str, dict[str, Any]] = {
     "WTI": {"path": "data/raw/WTI_1M_20260215_20260312.csv", "resample": True},
     "EURUSD": {"path": "data/raw/EURUSD_1M_20260215_20260312.csv", "resample": True},
     "VIX": {"path": "data/raw/VIX_1M_20241104_20260313.csv", "resample": True},
-}
-
-INT_BOUNDS: dict[str, tuple[int, int]] = {
-    "S_detect": (5, 60),
-    "scale_start": (2, 30),
-    "scale_end": (100, 500),
-    "scale_step": (2, 20),
-    "min_duration": (1, 20),
-    "cooldown_bars": (1, 20),
-    "price_gate_lb": (5, 100),
-    "vola_range_len": (20, 200),
-    "er_period": (5, 60),
-    "confirm_count": (1, 5),
-    "pivot_drift_lookback": (2, 20),
-    "pivot_drift_confirm_bias": (0, 2),
-    "edge_window": (3, 60),
-}
-
-FLOAT_BOUNDS: dict[str, tuple[float, float]] = {
-    "pct_extreme": (0.70, 0.99),
-    "min_agreement": (0.10, 0.90),
-    "dur_extreme_pct": (0.50, 0.99),
-    "vol_surge_thresh": (1.0, 3.0),
-    "scale_div_thresh": (0.10, 0.60),
-    "slope_thresh": (0.01, 0.50),
-    "vola_high_pct": (0.50, 0.99),
-    "pivot_drift_thresh": (0.001, 0.050),
-    "pivot_drift_gate_mult": (1.0, 10.0),
-    "momentum_velocity_thresh": (0.0, 0.05),
-    "gjr_vote_thresh": (0.05, 0.50),
-    "har_vote_thresh": (0.05, 0.50),
 }
 
 # ---------------------------------------------------------------------------
@@ -223,24 +200,6 @@ SEED_HEURISTIC_STRUCTURAL_EDGE_LOW: dict[str, Any] = {
     "low_edge_window": 5,
 }
 
-
-BOOL_FIELDS = [
-    "er_directional",
-    "use_trend",
-    "use_volume",
-    "use_momentum",
-    "use_momentum_velocity",
-    "use_volatility",
-    "use_er_gate",
-    "use_gjr_asym",
-    "use_har_vol",
-    "use_edge_voting",
-]
-
-CATEGORY_FIELDS: dict[str, list[str]] = {
-    "vola_method": ["ATR", "StdDev", "Intraday"],
-    "momentum_velocity_mode": ["Trend", "Reversal"],
-}
 
 PINE_HIGH_PARAMS = [
     ("S_detect_high", "S_detect_high"),
