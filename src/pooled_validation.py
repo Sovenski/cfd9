@@ -131,8 +131,8 @@ def build_calendar_folds(
         for sd in stream_datas:
             df_is = sd.df.loc[(sd.df.index >= is_start) & (sd.df.index < is_end)].copy()
             df_oos = sd.df.loc[(sd.df.index >= oos_start) & (sd.df.index < oos_end)].copy()
-            if len(df_is) < MIN_STREAM_BARS or len(df_oos) < 1:
-                continue   # IS must fit the full nest; OOS must exist
+            if len(df_is) < MIN_STREAM_BARS or len(df_oos) < MIN_STREAM_BARS:
+                continue   # nest cannot fit / too few bars → drop from this fold
             add_pivot_labels(df_is)
             add_pivot_labels(df_oos)
             fold.append(PreparedSlice(
