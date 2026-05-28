@@ -171,6 +171,13 @@ def _stream_stat(
     )
 
 
+def _fold_is_informative(components: dict) -> bool:
+    """A fold informs the side objective only if its pooled OOS contains
+    at least one structural pivot of that side (else its score is a forced
+    zero that only dilutes the bootstrap LCB)."""
+    return float(components.get("pooled_total_pivots_oos", 0.0)) > 0.0
+
+
 def evaluate_pooled_fold(
     params: Params, side: str, fold: Fold, weights: dict[str, float],
 ) -> tuple[float, dict[str, float]]:
@@ -198,6 +205,11 @@ def build_pooled_optuna_objective(
     Within-fold correlated streams are neutralised by 1/cluster_size weighting
     in ``pooled_side_score``; temporal overlap between adjacent folds is handled
     by the block bootstrap (block_len=2), same as the single-asset objective.
+
+    Folds whose pooled OOS contains zero structural pivots of the requested
+    side are excluded: their score is a forced zero regardless of params and
+    would only pin the bootstrap-LCB near zero without providing signal.
+    If no fold is informative, the trial returns 0.0 without crashing.
     """
     if side not in ("high", "low"):
         raise ValueError(f"side must be 'high' or 'low', got {side!r}")
@@ -208,15 +220,21 @@ def build_pooled_optuna_objective(
     def objective(trial: optuna.Trial) -> float:
         params = params_from_trial(trial, side)
         fold_scores: list[float] = []
-        for fold_idx, fold in enumerate(folds):
-            score, _components = evaluate_pooled_fold(params, side, fold, weights)
+        report_step: int = 0
+        for fold in folds:
+            score, components = evaluate_pooled_fold(params, side, fold, weights)
+            if not _fold_is_informative(components):
+                continue
             fold_scores.append(score)
             running_lcb = fold_scores_bootstrap_ci(
                 fold_scores, n_boot=1000, alpha=0.10, block_len=2
             )[0]
-            trial.report(running_lcb, fold_idx)
+            trial.report(running_lcb, report_step)
+            report_step += 1
             if trial.should_prune():
                 raise optuna.exceptions.TrialPruned()
+        if not fold_scores:
+            return 0.0
         return float(fold_scores_bootstrap_ci(
             fold_scores, n_boot=1000, alpha=0.10, block_len=2
         )[0])

@@ -93,6 +93,7 @@ def test_calendar_folds_drop_too_short_streams(tmp_path):
 import optuna
 from src.pooled_validation import (
     cluster_weights, evaluate_pooled_fold, build_pooled_optuna_objective,
+    _fold_is_informative,
 )
 from src.indicators import Params
 
@@ -118,3 +119,63 @@ def test_pooled_objective_runs_and_returns_float(tmp_path):
     study = optuna.create_study(direction="maximize")
     study.optimize(objective, n_trials=2)
     assert isinstance(study.best_value, float)
+
+
+# ---------------------------------------------------------------------------
+# TDD: informative-fold filter
+# ---------------------------------------------------------------------------
+
+def test_fold_is_informative_filters_zero_pivot_folds():
+    """_fold_is_informative returns False when pooled OOS pivots == 0."""
+    assert _fold_is_informative({"pooled_total_pivots_oos": 0.0}) is False
+    assert _fold_is_informative({"pooled_total_pivots_oos": 2.0}) is True
+    assert _fold_is_informative({}) is False
+
+
+def test_objective_skips_noninformative_folds():
+    """build_pooled_optuna_objective returns 0.0 when all folds are non-informative.
+
+    We verify the guard logic by constructing an objective over an empty folds
+    list is still rejected (raises ValueError) — that contract is unchanged —
+    then directly verify _fold_is_informative drives the skip by checking that
+    a components dict with pooled_total_pivots_oos==0 is treated as
+    non-informative, which is the only precondition the inner loop depends on.
+
+    The 0.0 fall-back when every fold is skipped is tested by monkey-patching
+    evaluate_pooled_fold to return (score=0.0, components={"pooled_total_pivots_oos": 0.0})
+    for every fold, then running the objective via a fresh Optuna trial.
+    """
+    import pytest
+    import unittest.mock as mock
+    from src.pooled_validation import build_pooled_optuna_objective
+
+    # Confirm empty-folds still raises (contract unchanged).
+    with pytest.raises(ValueError):
+        build_pooled_optuna_objective(
+            folds=[],
+            streams=[Stream("SPX", "1D", "p", "US_EQ")],
+            params_from_trial=lambda trial, side: None,
+            side="high",
+        )
+
+    # Build a minimal non-empty fold placeholder (content doesn't matter;
+    # evaluate_pooled_fold will be mocked).
+    dummy_fold = [object()]  # one fake PreparedSlice
+    dummy_streams = [Stream("SPX", "1D", "p", "US_EQ")]
+
+    # All folds yield zero OOS pivots → all non-informative → objective must return 0.0.
+    non_informative_result = (0.0, {"pooled_total_pivots_oos": 0.0})
+    with mock.patch(
+        "src.pooled_validation.evaluate_pooled_fold",
+        return_value=non_informative_result,
+    ):
+        objective = build_pooled_optuna_objective(
+            folds=[dummy_fold, dummy_fold],
+            streams=dummy_streams,
+            params_from_trial=lambda trial, side: None,
+            side="high",
+        )
+        optuna.logging.set_verbosity(optuna.logging.WARNING)
+        study = optuna.create_study(direction="maximize")
+        study.optimize(objective, n_trials=1)
+        assert study.best_value == 0.0
