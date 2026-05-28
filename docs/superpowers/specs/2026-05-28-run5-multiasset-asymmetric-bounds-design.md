@@ -74,20 +74,48 @@ identical literal ranges regardless of `side`; symmetry is hard-coded into the s
 ## 4. Objective 2 — Multi-asset / multi-timeframe pooled optimization
 
 ### 4.1 Data & universe layer
-- TV CSV exports (clean volume) in `data/raw/`, named `{TICKER}_{TF}_{start}_{end}.csv`.
-  Export list delivered once spec is locked.
+- **TV export schema (confirmed from `SP_SPX, 60_d2f5a.csv`):** columns
+  `time,open,high,low,close,Volume`; `time` = Unix seconds; capital `Volume`. The existing
+  `load_data` already lowercases columns and parses Unix `time`, so ingestion is compatible.
+- **Ingestion/normalization step:** TV default filenames are `{SOURCE}_{TICKER}, {TF}_{hash}.csv`
+  (e.g. `SP_SPX, 60_d2f5a.csv`). A small normalizer copies/renames each export into
+  `data/raw/` under the canonical `{TICKER}_{TF}_{start}_{end}.csv` convention and records
+  the source filename. (Deterministic, no data mutation.)
 - **Universe registry** in new **`src/universe.py`** (plain Python dict, mirroring the
   existing `INSTRUMENTS` dict — no YAML dependency): named groups → ticker lists
-  (`INDICES_US`, `INDICES_GLOBAL`, `STOCKS_MEGACAP`, `COMMODITIES`, …) + a `TIMEFRAMES`
-  list. Pool unit = an **`(asset, timeframe)` stream**.
+  (`INDICES_US`, `INDICES_GLOBAL`, `STOCKS_MEGACAP`, `COMMODITIES`, …), a `TIMEFRAMES`
+  list, and a **cluster map** (which assets share an underlying/economy, for §4.3). Pool
+  unit = an **`(asset, timeframe)` stream**.
 - **Notebook selectors (dropdowns):** choose asset group(s) AND timeframe(s) — single /
   some / all / mixed. **Timeframe selection is symmetric for both sides, decided per run,
-  with no built-in default** (user choice; HIGH and LOW each get the selected streams).
+  with no built-in default**.
 - **Loader:** reads each stream via `load_data`, applies `add_pivot_labels` (v4 oracle,
-  **nest stays [50,100,200] bars on every timeframe** — the scale-invariance assumption,
-  gated by §5.3), computes labels on the FULL stream then date-slices (avoids edge
-  artifacts), and builds detector artifacts per fold-slice (§4.4).
-- **Volume:** used as-is (clean from TV).
+  **nest stays [50,100,200] bars on every timeframe** — scale-invariance assumption, gated
+  by §5.3), computes labels on the FULL stream then date-slices, builds detector artifacts
+  per fold-slice (§4.4).
+
+### 4.1a Volume quality — flag & separate (NOT filter)
+TV intraday volume for indices is often **partial**: backfilled placeholder early, real
+later. Confirmed in `SP_SPX, 60_d2f5a.csv` — placeholder (constant ~3600 / zeros) for
+2015–2020, transitioning in 2021, **real volume from ~2022** (median ~250–340 M). Volume
+quality is therefore a per-`(stream, date-range)` attribute, not a yes/no per file.
+
+- **Volume-quality profiler** (run once per stream, cached): flags placeholder bars
+  (constant low/bar-seconds values such as 3600/3599/2400, zeros, and a sub-threshold
+  floor) and emits per stream: `volume_quality ∈ {full, partial, none}` plus
+  `volume_real_from` (first date where placeholder share < 5%). Stored alongside the
+  universe registry / a profile cache.
+- **Run-level volume policy (selectable in notebook), runs are SEPARATED by it:**
+  - `price_only` — volume votes forced OFF both sides; every stream/range usable. Clean,
+    consistent; the natural default for HIGH (volume adds nothing to tops).
+  - `volume_required` — include only the **real-volume date-range** of each stream
+    (`[volume_real_from, end]`); volume votes active. The min-bars gate (§4.2) applies to
+    that trimmed slice. This is the regime where the LOW side's volume lever is honest.
+  - `mixed` — all streams/ranges included; volume votes active where real, inert where
+    placeholder, with the per-stream flag recorded.
+- Because volume-dependent conclusions (LOW side) must not be contaminated by
+  placeholder-volume streams, a `volume_required` run is a **separate study** from a
+  `price_only` run — never silently merged.
 
 ### 4.2 Time-aligned pooled folds (calendar-based) — core interface change
 **This replaces the row-index fold interface; it is not additive (review BLOCKER).** The
@@ -139,8 +167,9 @@ prevents the LCB from over-crediting correlated duplicates (the review's top con
 ### 5.2 Reproducibility + holdout governance (decided: pre-register + pre/post)
 - New seeded Optuna study `spec_v15_run5_multiasset_<side>` (a *new* study, not merged with
   single-asset journals); storage via `monitor145.make_storage`.
-- Run report records: selected universe + timeframes, per-stream date ranges + data-file
-  hashes, cluster map, resolved `HIGH_SPACE`/`LOW_SPACE` bounds.
+- Run report records: selected universe + timeframes, **volume policy + per-stream
+  `volume_quality`/`volume_real_from` tags**, per-stream date ranges + data-file hashes,
+  cluster map, resolved `HIGH_SPACE`/`LOW_SPACE` bounds.
 - **Pre-registration (review MAJOR):** before the run, write the expected direction of each
   relaxed HIGH floor (`dur_extreme_pct↓`, `pct_extreme↓`) and the hypotheses, into the run
   report. **Report exact holdout HIGH/LOW hit counts before vs after** (not "improvement"),
@@ -162,6 +191,9 @@ mixed-timeframe result.
    current row-index folds within rounding.
 3. Pooled scoring: toy streams with known TP/FP/FN and a known cluster map aggregate to the
    correct `1/cluster_size`-weighted pooled precision/recall.
+3b. Volume profiler: on `SP_SPX, 60_d2f5a.csv` it must classify `volume_quality=partial`
+    and return `volume_real_from ≈ 2022`; on a fully-real stream → `full`; on a
+    constant/zero stream → `none`.
 4. **Sprint-0 acceptance test (first deliverable, not a precondition):** end-to-end pooled
    run on SPX-1D + DAX-1D (data already on disk) proving the pooled objective works on two
    real streams before the full universe export.
@@ -189,3 +221,12 @@ export per new stream is a delivery requirement, tracked in the plan.
 - MAJOR (consistency): `pivot_drift_lb` naming + frozen categoricals + stability-probe bounds → §3.
 - MINOR: module placement (`src/search_space.py`, `src/universe.py`), parity fixtures per asset, smoke = sprint-0 → §3/§4.1/§5.4/§5.5.
 - Decisions: 1W-in-LOW = per-run dropdown, no default (§4.1); phasing = one combined effort; governance = pre-register + pre/post (§5.2).
+
+## Appendix B — Data-export findings (2026-05-28)
+- Inspected first real TV export `SP_SPX, 60_d2f5a.csv` (60m, 2015→2026, 20,010 bars,
+  schema `time,open,high,low,close,Volume`, Unix seconds).
+- Volume is **partial**: placeholder (~3600 constant / zeros) 2015–2020, transitioning
+  2021, **real from ~2022** (median ~250–340 M). → drove §4.1a (volume quality = per
+  stream+range; flag & separate, not filter; run-level volume policy).
+- User clarification: volume-quality streams are **flagged and separated** into distinct
+  runs/studies, never deleted; recent SPX intraday volume is high quality.
