@@ -21,23 +21,30 @@ and **no detector changes** (so the Pine indicator stays in parity):
 
 ## How to run (Colab)
 
-1. Export TV daily CSVs into `data/raw/` as `{TICKER}_{TF}_{start}_{end}.csv`
-   (e.g. `SPX_1D_*.csv`, `NDX_1D_*.csv`, `DAX_1D_*.csv`, …). The loader auto-lowercases
-   columns and parses the Unix `time` column.
-2. Open `optimize.ipynb`. The Run 5 cells default to:
+`optimize.ipynb` is the v16 workbook. Cells 0–7 are the **v16 flow** (run top-to-bottom);
+cells 9–13 are the **legacy v15 single-asset** runner, demoted below a divider (optional,
+not part of v16).
+
+1. Put TV daily exports in **Google Drive** at `MyDrive/cfd9/data/raw/` named
+   `{TICKER}_{TF}_*.csv` (e.g. `SPX_1D_*.csv`, `NDX_1D_*.csv`, `DAX_1D_*.csv`, …). The repo's
+   own `data/` is untracked, so a fresh Colab clone has none — the notebook reads the Drive
+   dir (`DATA_DIR`), not the repo. The loader auto-lowercases columns and parses Unix `time`.
+2. Run **cell 1** (mount Drive) → **cell 2** (clone/update repo + install).
+3. **Cell 3 — run settings** (defaults):
    - `SELECTED_GROUPS = ["INDICES_US", "INDICES_GLOBAL"]`  (SPX, NDX, DJI, RUT, DAX, NI225, UKX)
    - `SELECTED_TIMEFRAMES = ["1D"]`
-   - `VOLUME_POLICY = "price_only"`  (robust default; volume adds nothing to HIGH, and raw
-     index daily volume is unreliable — use `volume_required` only for LOW-side volume
-     experiments)
+   - `VOLUME_POLICY = "price_only"`  (robust default; volume adds nothing to HIGH, raw index
+     daily volume is unreliable — use `volume_required` only for LOW-side volume experiments)
    - `N_TRIALS = 250`  (per side)
-3. **Run the pool-sufficiency diagnostic cell FIRST.** It prints resolved streams, fold
-   count, and structural-pivots-per-OOS-fold per side, with a rule of thumb (aim for
-   ≥~5 informative folds, mean ≥~3 pivots/fold). If it warns the pool is thin, add more
-   index exports before launching — a thin pool wastes the run.
-4. Run the launch cell (250 trials/side, seeded from the heuristic-structural config).
-5. Run the reproducibility-report cell to record universe, volume policy + per-stream
-   quality tags, date ranges, data hashes, and resolved bounds.
+4. **Cell 4** resolves the pool; **cell 5 (diagnostic) — RUN IT FIRST.** It prints resolved
+   streams, fold count, and structural-pivots-per-OOS-fold per side (aim for ≥~5 informative
+   folds, mean ≥~3 pivots/fold). If thin, add more index exports before launching.
+5. **Cell 6 — launch both sides.** 250 trials/side, seeded from the heuristic-structural
+   config, with **persistent JournalFileBackend storage on Drive** (`MyDrive/cfd9/runs/`) and
+   `load_if_exists=True` → **resumable**: if Colab disconnects, just re-run the cell and it
+   continues from where it left off.
+6. **Cell 7** writes a provenance JSON (universe, volume policy + per-stream quality tags,
+   date ranges, data hashes) to `MyDrive/cfd9/results/`.
 
 ## Design guarantees & honest caveats
 
