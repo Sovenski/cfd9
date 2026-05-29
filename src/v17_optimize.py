@@ -107,6 +107,17 @@ def active_threshold_fields(params: Params, side: str) -> list[str]:
     return [f"{b}_{side}" for b in fields]
 
 
+def planned_evals(seed: Params, side: str, grid_n: int, max_sweeps: int) -> int:
+    """Upper-bound on scorer evaluations: 1 seed + sweeps x fields x (grid_n-1).
+
+    Real runs finish at or under this (ascent stops early when a sweep yields no
+    improvement, and the current value is deduped from each grid). Good enough
+    for an up-front ETA.
+    """
+    n_fields = len(active_threshold_fields(seed, side))
+    return 1 + max_sweeps * n_fields * max(1, grid_n - 1)
+
+
 def _candidate_grid(base: str, side: str, current: float, grid_n: int) -> np.ndarray:
     """Candidate values for one float field: bounds-spanning grid + current."""
     space = space_for(side)
@@ -122,6 +133,8 @@ class AscentResult:
     seed_score: float
     n_evals: int
     history: list[tuple[str, float, float]]  # (field, chosen_value, score_after)
+    coords: list[str] = field(default_factory=list)      # threshold field names explored
+    trace: list = field(default_factory=list)            # every evaluated config + score
 
 
 def coordinate_ascent(
@@ -132,6 +145,8 @@ def coordinate_ascent(
     max_sweeps: int = 3,
     eps: float = 1e-6,
     progress: Optional[Callable[[str], None]] = None,
+    on_eval: Optional[Callable[[int], None]] = None,
+    seed_score: Optional[float] = None,
 ) -> AscentResult:
     """Optimize continuous thresholds by exact per-axis line search.
 
@@ -142,11 +157,21 @@ def coordinate_ascent(
     """
     log = progress or (lambda m: logger.info(m))
     cur = seed
-    cur_score = scorer.score(cur)
+    n_evals = 0
+    if seed_score is None:
+        cur_score = scorer.score(cur)
+        n_evals = 1
+        if on_eval:
+            on_eval(n_evals)
+    else:
+        cur_score = float(seed_score)  # caller already scored the seed (for ETA)
     seed_score = cur_score
-    n_evals = 1
     history: list[tuple[str, float, float]] = []
     fields = active_threshold_fields(cur, side)
+    # Trace of every evaluated config (active threshold values + score) for the
+    # explored-space visualization. Seed is the first point.
+    trace: list[dict] = [{**{f: float(getattr(cur, f)) for f in fields},
+                          "score": float(cur_score), "varied": "seed"}]
     log(f"[v17:{side}] seed LCB={cur_score:.5f}; ascending {len(fields)} thresholds")
 
     for sweep in range(max_sweeps):
@@ -162,6 +187,10 @@ def coordinate_ascent(
                 trial_params = dataclasses.replace(cur, **{fld: float(c)})
                 sc = scorer.score(trial_params)
                 n_evals += 1
+                if on_eval:
+                    on_eval(n_evals)
+                trace.append({**{f: float(getattr(cur, f)) for f in fields},
+                              fld: float(c), "score": float(sc), "varied": fld})
                 if sc > best_sc + eps:
                     best_sc, best_val = sc, float(c)
             if best_val != getattr(cur, fld):
@@ -173,10 +202,11 @@ def coordinate_ascent(
         if not improved:
             log(f"[v17:{side}] converged after sweep {sweep} ({n_evals} evals)")
             break
-    return AscentResult(cur, cur_score, seed_score, n_evals, history)
+    return AscentResult(cur, cur_score, seed_score, n_evals, history,
+                        coords=fields, trace=trace)
 
 
 __all__ = [
     "PooledScorer", "AscentResult", "coordinate_ascent",
-    "active_threshold_fields",
+    "active_threshold_fields", "planned_evals",
 ]

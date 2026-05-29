@@ -33,9 +33,50 @@ from .pooled_validation import (
 from .scoring import add_pivot_labels
 from .speculatores145 import params_from_trial
 from .universe import resolve_streams
-from .v17_optimize import PooledScorer, coordinate_ascent
+from .v17_optimize import PooledScorer, coordinate_ascent, planned_evals
 
 logger = logging.getLogger(__name__)
+
+
+def _ascend_with_progress(seed, scorer, side, grid_n, max_sweeps, show):
+    """Run coordinate_ascent with an up-front ETA + live progress bar.
+
+    Times one seed eval, estimates total evals, prints an ETA, then shows a
+    tqdm bar (falls back to plain prints if tqdm is unavailable).
+    """
+    import time
+
+    planned = planned_evals(seed, side, grid_n, max_sweeps)
+    t0 = time.time()
+    seed_score = scorer.score(seed)        # one real eval -> timing basis
+    sec = time.time() - t0
+    eta_min = sec * planned / 60.0
+    print(f"[v17:{side}] ~{planned} evals x {sec:.1f}s/eval  ->  ETA <= {eta_min:.1f} min "
+          f"({len(scorer._eval_folds)} informative folds; seed LCB {seed_score:.5f})")
+
+    bar = None
+    if show:
+        try:
+            from tqdm.auto import tqdm
+            bar = tqdm(total=planned, desc=f"v17:{side}", unit="eval")
+            bar.update(1)  # account for the seed eval already done
+        except Exception:
+            bar = None
+
+    last = [1]
+    def _on_eval(done: int) -> None:
+        if bar is not None:
+            bar.update(done - last[0]); last[0] = done
+        elif done % 10 == 0:
+            print(f"[v17:{side}] {done}/{planned} evals "
+                  f"({(time.time()-t0)/60:.1f} min)")
+
+    res = coordinate_ascent(seed, scorer, side=side, grid_n=grid_n,
+                            max_sweeps=max_sweeps, on_eval=_on_eval,
+                            seed_score=seed_score)
+    if bar is not None:
+        bar.close()
+    return res
 
 _TF_SECONDS = {"1D": 86400.0, "1W": 604800.0, "60": 3600.0, "240": 14400.0, "1m": 60.0}
 
@@ -57,6 +98,7 @@ def run_v17(
     max_sweeps: int = 3,
     results_dir: Optional[str] = None,
     run_slug: str = "v17_local",
+    progress: bool = True,
 ) -> dict:
     """Resolve a pool, build folds, and run coordinate-ascent per side."""
     era_kw = era_kw or {}
@@ -92,14 +134,15 @@ def run_v17(
         seed = (seed_from_trial_dict(seed_params[side], side)
                 if seed_params and side in seed_params else Params())
         scorer = PooledScorer(folds=folds, streams=kept, side=side)
-        res = coordinate_ascent(seed, scorer, side=side, grid_n=grid_n,
-                                max_sweeps=max_sweeps, progress=logger.info)
+        res = _ascend_with_progress(seed, scorer, side, grid_n, max_sweeps, progress)
         out["sides"][side] = {
             "seed_lcb": res.seed_score,
             "final_lcb": res.score,
             "n_evals": res.n_evals,
             "changed": [(f, v) for f, v, _ in res.history],
             "best_params": {k: getattr(res.params, k) for k in vars(res.params)},
+            "coords": res.coords,      # explored threshold field names
+            "trace": res.trace,        # every evaluated config + 'score' (for the map)
         }
         logger.info("[v17:%s] seed=%.5f -> final=%.5f (%d evals)",
                     side, res.seed_score, res.score, res.n_evals)
