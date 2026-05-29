@@ -65,15 +65,29 @@ class PooledScorer:
     alpha: float = 0.10
     block_len: int = 2
     _weights: dict = field(init=False)
+    _eval_folds: list = field(init=False)
 
     def __post_init__(self) -> None:
         if self.side not in ("high", "low"):
             raise ValueError(f"side must be 'high'|'low', got {self.side!r}")
         self._weights = cluster_weights(self.streams)
+        # Fold informativeness is LABEL-only (does the OOS slice contain any
+        # structural pivot of this side?) and therefore param-independent. The
+        # detector never fires a true positive on a fold with zero such pivots,
+        # so that fold's score is a forced 0 that gets filtered anyway. Skip it
+        # up front: identical objective, fewer detector runs per eval.
+        lbl = 1 if self.side == "high" else -1
+        col = f"pivot_N{REFERENCE_N}"
+        self._eval_folds = [
+            fold for fold in self.folds
+            if sum(int((sl.df_oos[col] == lbl).sum()) for sl in fold) > 0
+        ]
+        logger.info("PooledScorer[%s]: %d/%d folds informative (label-only)",
+                    self.side, len(self._eval_folds), len(self.folds))
 
     def score(self, params: Params) -> float:
         fold_scores: list[float] = []
-        for fold in self.folds:
+        for fold in self._eval_folds:
             s, comp = evaluate_pooled_fold(params, self.side, fold, self._weights)
             if _fold_is_informative(comp):
                 fold_scores.append(s)
