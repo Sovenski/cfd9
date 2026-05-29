@@ -45,6 +45,7 @@ from .validation import (
     temporal_split,
     walk_forward_folds,
 )
+from .search_space import SearchSpace, space_for
 
 logger = logging.getLogger(__name__)
 
@@ -84,37 +85,6 @@ INSTRUMENTS: dict[str, dict[str, Any]] = {
     "WTI": {"path": "data/raw/WTI_1M_20260215_20260312.csv", "resample": True},
     "EURUSD": {"path": "data/raw/EURUSD_1M_20260215_20260312.csv", "resample": True},
     "VIX": {"path": "data/raw/VIX_1M_20241104_20260313.csv", "resample": True},
-}
-
-INT_BOUNDS: dict[str, tuple[int, int]] = {
-    "S_detect": (5, 60),
-    "scale_start": (2, 30),
-    "scale_end": (100, 500),
-    "scale_step": (2, 20),
-    "min_duration": (1, 20),
-    "cooldown_bars": (1, 20),
-    "price_gate_lb": (5, 100),
-    "vola_range_len": (20, 200),
-    "er_period": (5, 60),
-    "confirm_count": (1, 5),
-    "pivot_drift_lookback": (2, 20),
-    "pivot_drift_confirm_bias": (0, 2),
-    "edge_window": (3, 60),
-}
-
-FLOAT_BOUNDS: dict[str, tuple[float, float]] = {
-    "pct_extreme": (0.70, 0.99),
-    "min_agreement": (0.10, 0.90),
-    "dur_extreme_pct": (0.50, 0.99),
-    "vol_surge_thresh": (1.0, 3.0),
-    "scale_div_thresh": (0.10, 0.60),
-    "slope_thresh": (0.01, 0.50),
-    "vola_high_pct": (0.50, 0.99),
-    "pivot_drift_thresh": (0.001, 0.050),
-    "pivot_drift_gate_mult": (1.0, 10.0),
-    "momentum_velocity_thresh": (0.0, 0.05),
-    "gjr_vote_thresh": (0.05, 0.50),
-    "har_vote_thresh": (0.05, 0.50),
 }
 
 # ---------------------------------------------------------------------------
@@ -223,24 +193,6 @@ SEED_HEURISTIC_STRUCTURAL_EDGE_LOW: dict[str, Any] = {
     "low_edge_window": 5,
 }
 
-
-BOOL_FIELDS = [
-    "er_directional",
-    "use_trend",
-    "use_volume",
-    "use_momentum",
-    "use_momentum_velocity",
-    "use_volatility",
-    "use_er_gate",
-    "use_gjr_asym",
-    "use_har_vol",
-    "use_edge_voting",
-]
-
-CATEGORY_FIELDS: dict[str, list[str]] = {
-    "vola_method": ["ATR", "StdDev", "Intraday"],
-    "momentum_velocity_mode": ["Trend", "Reversal"],
-}
 
 PINE_HIGH_PARAMS = [
     ("S_detect_high", "S_detect_high"),
@@ -384,32 +336,41 @@ def params_from_trial(trial: optuna.Trial, side: str) -> Params:
     if side not in ("high", "low"):
         raise ValueError(f"side must be 'high' or 'low', got {side!r}")
     s = side
+    space = space_for(side)
 
-    S_detect = trial.suggest_int(f"{s}_S_detect", 5, 60)
-    scale_start = trial.suggest_int(f"{s}_scale_start", 2, 30)
-    scale_end = trial.suggest_int(f"{s}_scale_end", 100, 500)
-    scale_step = trial.suggest_int(f"{s}_scale_step", 2, 20)
-    min_duration = trial.suggest_int(f"{s}_min_duration", 1, 20)
-    cooldown_bars = trial.suggest_int(f"{s}_cooldown_bars", 1, 20)
-    price_gate_lb = trial.suggest_int(f"{s}_price_gate_lb", 5, 100)
-    vola_range_len = trial.suggest_int(f"{s}_vola_range_len", 20, 200)
-    er_period = trial.suggest_int(f"{s}_er_period", 5, 60)
-    confirm_count = trial.suggest_int(f"{s}_confirm_count", 1, 5)
-    pivot_drift_lb = trial.suggest_int(f"{s}_pivot_drift_lb", 2, 20)
-    pivot_drift_confirm_bias = trial.suggest_int(f"{s}_pivot_drift_confirm_bias", 0, 2)
+    def _gi(name: str) -> int:
+        low, high = space.int_bounds[name]
+        return trial.suggest_int(f"{s}_{space.trial_key(name)}", low, high)
 
-    pct_extreme = trial.suggest_float(f"{s}_pct_extreme", 0.70, 0.99)
-    min_agreement = trial.suggest_float(f"{s}_min_agreement", 0.10, 0.90)
-    dur_extreme_pct = trial.suggest_float(f"{s}_dur_extreme_pct", 0.50, 0.99)
-    vol_surge_thresh = trial.suggest_float(f"{s}_vol_surge_thresh", 1.0, 3.0)
-    scale_div_thresh = trial.suggest_float(f"{s}_scale_div_thresh", 0.10, 0.60)
-    slope_thresh = trial.suggest_float(f"{s}_slope_thresh", 0.01, 0.50)
-    vola_high_pct = trial.suggest_float(f"{s}_vola_high_pct", 0.50, 0.99)
-    pivot_drift_thresh = trial.suggest_float(f"{s}_pivot_drift_thresh", 0.001, 0.050)
-    pivot_drift_gate_mult = trial.suggest_float(f"{s}_pivot_drift_gate_mult", 1.0, 10.0)
-    momentum_velocity_thresh = trial.suggest_float(f"{s}_momentum_velocity_thresh", 0.0, 0.05)
-    gjr_vote_thresh = trial.suggest_float(f"{s}_gjr_vote_thresh", 0.05, 0.50)
-    har_vote_thresh = trial.suggest_float(f"{s}_har_vote_thresh", 0.05, 0.50)
+    def _gf(name: str) -> float:
+        low, high = space.float_bounds[name]
+        return trial.suggest_float(f"{s}_{space.trial_key(name)}", low, high)
+
+    S_detect = _gi("S_detect")
+    scale_start = _gi("scale_start")
+    scale_end = _gi("scale_end")
+    scale_step = _gi("scale_step")
+    min_duration = _gi("min_duration")
+    cooldown_bars = _gi("cooldown_bars")
+    price_gate_lb = _gi("price_gate_lb")
+    vola_range_len = _gi("vola_range_len")
+    er_period = _gi("er_period")
+    confirm_count = _gi("confirm_count")
+    pivot_drift_lb = _gi("pivot_drift_lookback")
+    pivot_drift_confirm_bias = _gi("pivot_drift_confirm_bias")
+
+    pct_extreme = _gf("pct_extreme")
+    min_agreement = _gf("min_agreement")
+    dur_extreme_pct = _gf("dur_extreme_pct")
+    vol_surge_thresh = _gf("vol_surge_thresh")
+    scale_div_thresh = _gf("scale_div_thresh")
+    slope_thresh = _gf("slope_thresh")
+    vola_high_pct = _gf("vola_high_pct")
+    pivot_drift_thresh = _gf("pivot_drift_thresh")
+    pivot_drift_gate_mult = _gf("pivot_drift_gate_mult")
+    momentum_velocity_thresh = _gf("momentum_velocity_thresh")
+    gjr_vote_thresh = _gf("gjr_vote_thresh")
+    har_vote_thresh = _gf("har_vote_thresh")
 
     er_directional = trial.suggest_categorical(f"{s}_er_directional", [True, False])
     use_trend = trial.suggest_categorical(f"{s}_use_trend", [True, False])
@@ -734,23 +695,24 @@ def _mutate_local_param(
     rng: random.Random,
     value: Any,
     field_name: str,
+    space: SearchSpace,
 ) -> Any:
-    if field_name in INT_BOUNDS:
-        low, high = INT_BOUNDS[field_name]
+    if field_name in space.int_bounds:
+        low, high = space.int_bounds[field_name]
         radius = max(1, int(round((high - low) * 0.1)))
         local_low = max(low, int(value) - radius)
         local_high = min(high, int(value) + radius)
         return rng.randint(local_low, local_high)
-    if field_name in FLOAT_BOUNDS:
-        low, high = FLOAT_BOUNDS[field_name]
+    if field_name in space.float_bounds:
+        low, high = space.float_bounds[field_name]
         radius = (high - low) * 0.1
         local_low = max(low, float(value) - radius)
         local_high = min(high, float(value) + radius)
         return rng.uniform(local_low, local_high)
-    if field_name in BOOL_FIELDS:
+    if field_name in space.bool_fields:
         return value if rng.random() < 0.85 else (not bool(value))
-    if field_name in CATEGORY_FIELDS:
-        choices = CATEGORY_FIELDS[field_name]
+    if field_name in space.category_fields:
+        choices = space.category_fields[field_name]
         if rng.random() < 0.85:
             return value
         alternatives = [choice for choice in choices if choice != value]
@@ -763,12 +725,19 @@ def _sample_local_params(
     side: str,
     rng: random.Random,
 ) -> Params:
+    space = space_for(side)
     base_dict = _params_fields(Params())
     current = _params_fields(params)
     overrides: dict[str, Any] = {}
-    for field_name in list(INT_BOUNDS) + list(FLOAT_BOUNDS) + BOOL_FIELDS + list(CATEGORY_FIELDS):
+    field_names = (
+        list(space.int_bounds) + list(space.float_bounds)
+        + list(space.bool_fields) + list(space.category_fields)
+    )
+    for field_name in field_names:
         side_field = f"{field_name}_{side}"
-        overrides[side_field] = _mutate_local_param(rng, current[side_field], field_name)
+        overrides[side_field] = _mutate_local_param(
+            rng, current[side_field], field_name, space
+        )
     return Params(**{**base_dict, **overrides})
 
 
@@ -778,21 +747,21 @@ def _sample_global_params(
 ) -> Params:
     """Uniform global restart sampler — Scorer v2 item 11.
 
-    Draws each int/float field uniformly from its declared bounds, each
-    bool 50/50, and each categorical uniformly. Used by
-    ``summarize_stability`` to compare the local basin around a winner
-    against the wider search space.
+    Draws each int/float field uniformly from its per-side bounds, each bool
+    50/50, each categorical uniformly. Used by ``summarize_stability`` to
+    compare the local basin around a winner against the wider search space.
     """
+    space = space_for(side)
     base_dict = _params_fields(Params())
     overrides: dict[str, Any] = {}
-    for field_name, (low, high) in INT_BOUNDS.items():
+    for field_name, (low, high) in space.int_bounds.items():
         overrides[f"{field_name}_{side}"] = rng.randint(low, high)
-    for field_name, (low, high) in FLOAT_BOUNDS.items():
+    for field_name, (low, high) in space.float_bounds.items():
         overrides[f"{field_name}_{side}"] = rng.uniform(low, high)
-    for field_name in BOOL_FIELDS:
+    for field_name in space.bool_fields:
         overrides[f"{field_name}_{side}"] = bool(rng.random() < 0.5)
-    for field_name, choices in CATEGORY_FIELDS.items():
-        overrides[f"{field_name}_{side}"] = rng.choice(choices)
+    for field_name, choices in space.category_fields.items():
+        overrides[f"{field_name}_{side}"] = rng.choice(list(choices))
     return Params(**{**base_dict, **overrides})
 
 
