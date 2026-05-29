@@ -1,0 +1,36 @@
+# ============================================================
+# v17 — Calibrated Coordinate-Ascent run (paste into a Colab cell)
+# Run AFTER cell 1 (Drive mount). Detector unchanged (parity preserved).
+# ============================================================
+%cd /content/cfd9
+!git fetch origin -q && git checkout feature/v17-calibrated-coordinate-ascent -q && git pull --ff-only -q
+!pip install -q -r requirements.txt
+
+import json
+from src.v17_runner import run_v17
+
+# Warm-start from the committed v16 best params (recommended).
+V16_BEST = json.load(open("results/v16_best_params.json"))
+
+# Pool: start with INDICES+COMMODITIES (7 streams) for a ~tractable run.
+# Add "WORLD_ETF","FX" for the full pool (slower — each eval re-runs the detector
+# on every stream*fold, so widen the pool OR raise grid_n/max_sweeps, not both).
+out = run_v17(
+    groups=["INDICES", "COMMODITIES"],
+    timeframes=["1D"],
+    data_dir="/content/drive/MyDrive/cfd9/data/raw_v16",
+    sides=("high", "low"),
+    seed_params=V16_BEST,        # warm-start; omit for the gold-default seed
+    era_kw={},                   # {} = auto common-era folds (recommended)
+    grid_n=5,                    # candidates per threshold per sweep
+    max_sweeps=2,                # full passes over the thresholds
+    results_dir="/content/drive/MyDrive/cfd9/results",
+    run_slug="v17_1D",
+)
+
+for side in ("high", "low"):
+    s = out["sides"][side]
+    print(f"[{side}] seed LCB {s['seed_lcb']:.5f}  ->  final LCB {s['final_lcb']:.5f} "
+          f"({s['n_evals']} evals, changed {len(s['changed'])} thresholds)")
+print("provenance:", out.get("_written"))
+# best_params per side are in out["sides"][side]["best_params"] (Pine-portable constants).
