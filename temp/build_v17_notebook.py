@@ -205,6 +205,54 @@ for side in ('high', 'low'):
     print('changed thresholds:', s['changed'])
     print(json.dumps(s['best_params'], indent=2, default=str))"""
 
+CELL_VIZ = '''# === v17 - explored-space map (PCA-2D of every evaluated config, colored by LCB) ===
+# Coordinate-ascent explores one threshold axis at a time from the seed, so the
+# cloud looks like axis-aligned spokes around the seed star. PCA (numpy SVD)
+# projects the high-dim threshold vectors to 2-D; color = pooled LCB score.
+import numpy as np
+import matplotlib.pyplot as plt
+
+sides = [s for s in ('high', 'low') if v17_out['sides'].get(s, {}).get('trace')]
+fig, axes = plt.subplots(1, max(1, len(sides)),
+                         figsize=(6.5 * max(1, len(sides)), 5.2), squeeze=False)
+for ax, side in zip(axes[0], sides):
+    s = v17_out['sides'][side]
+    coords, tr = list(s['coords']), s['trace']
+    if len(tr) < 3 or len(coords) < 2:
+        ax.set_title(f"{side.upper()}: too few evals to map"); ax.axis('off'); continue
+    X = np.array([[float(t[c]) for c in coords] for t in tr], float)
+    sc = np.array([float(t['score']) for t in tr], float)
+    mu, sd = X.mean(0), X.std(0); sd[sd == 0] = 1.0
+    Xs = (X - mu) / sd
+    Xc = Xs - Xs.mean(0)
+    _, S, Vt = np.linalg.svd(Xc, full_matrices=False)
+    P = Xc @ Vt[:2].T
+    pts = ax.scatter(P[:, 0], P[:, 1], c=sc, cmap='viridis', s=28, alpha=0.85, edgecolor='none')
+    ax.scatter(P[0, 0], P[0, 1], marker='*', s=320, facecolor='white', edgecolor='black',
+               linewidth=1.3, zorder=5, label='seed (v16 best)')
+    bi = int(np.argmax(sc))
+    ax.scatter(P[bi, 0], P[bi, 1], marker='X', s=170, color='crimson', edgecolor='black',
+               zorder=6, label=f"best LCB={sc[bi]:.4f}")
+    var = (S[:2] ** 2 / (S ** 2).sum()) * 100 if S.sum() else [0, 0]
+    ax.set_xlabel(f"PC1 ({var[0]:.0f}% var)"); ax.set_ylabel(f"PC2 ({var[1]:.0f}% var)")
+    ax.set_title(f"{side.upper()} explored space - {len(tr)} evals")
+    ax.legend(loc='best', fontsize=8); fig.colorbar(pts, ax=ax, label='pooled LCB')
+plt.tight_layout(); plt.show()
+
+# Which thresholds actually moved the score (|Pearson r| of each axis vs LCB):
+for side in sides:
+    s = v17_out['sides'][side]; coords, tr = list(s['coords']), s['trace']
+    X = np.array([[float(t[c]) for c in coords] for t in tr], float)
+    y = np.array([float(t['score']) for t in tr], float)
+    if len(tr) < 3 or y.std() == 0:
+        print(f"{side}: flat / insufficient trace for sensitivity"); continue
+    rs = [(c, 0.0 if X[:, j].std() == 0 else float(np.corrcoef(X[:, j], y)[0, 1]))
+          for j, c in enumerate(coords)]
+    rs.sort(key=lambda t: -abs(t[1]))
+    print(f"\\n{side.upper()} most score-sensitive thresholds (|r| vs LCB):")
+    for c, rv in rs[:5]:
+        print(f"  {c:30s} r={rv:+.3f}")'''
+
 CELLS = [
     ("markdown", MD_INTRO),
     ("code", CELL_MOUNT),
@@ -214,6 +262,7 @@ CELLS = [
     ("code", CELL_DIAG),
     ("code", CELL_RUN),
     ("code", CELL_RESULTS),
+    ("code", CELL_VIZ),
 ]
 
 
