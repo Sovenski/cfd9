@@ -33,20 +33,19 @@ CELL_MOUNT = """# Cell 1 - Mount Google Drive
 from google.colab import drive
 drive.mount('/content/drive')"""
 
-CELL_CLONE = f"""# Cell 2 - Clone/update repo (v17 branch) and install deps
+CELL_CLONE = """# Cell 2 - Clone/update repo (master) and install deps
 import os
 from pathlib import Path
 
 REPO_DIR = Path('/content/cfd9')
 REPO_URL = 'https://github.com/Sovenski/cfd9.git'
-BRANCH = '{BRANCH}'
 
 if not REPO_DIR.exists():
-    !git clone {{REPO_URL}} {{REPO_DIR}}
-%cd {{REPO_DIR}}
-!git fetch origin -q && git checkout {{BRANCH}} && git pull --ff-only -q
+    !git clone {REPO_URL} {REPO_DIR}
+%cd {REPO_DIR}
+!git pull --ff-only -q
 !pip install -q -r requirements.txt
-!git rev-parse --abbrev-ref HEAD && git rev-parse --short HEAD"""
+!git rev-parse --short HEAD"""
 
 CELL_SETTINGS = '''#@title v17 Run Settings  { display-mode: "form" }
 #@markdown ## Speculatores v17 - run settings
