@@ -33,6 +33,7 @@ from .pooled_validation import (
 from .scoring import add_pivot_labels
 from .speculatores145 import params_from_trial
 from .universe import resolve_streams
+from .v17_fastdetector import FastPooledScorer
 from .v17_optimize import PooledScorer, coordinate_ascent, planned_evals
 
 logger = logging.getLogger(__name__)
@@ -51,8 +52,9 @@ def _ascend_with_progress(seed, scorer, side, grid_n, max_sweeps, show):
     seed_score = scorer.score(seed)        # one real eval -> timing basis
     sec = time.time() - t0
     eta_min = sec * planned / 60.0
+    _nfolds = len(getattr(scorer, "_eval_folds", getattr(scorer, "_fast", [])))
     print(f"[v17:{side}] ~{planned} evals x {sec:.1f}s/eval  ->  ETA <= {eta_min:.1f} min "
-          f"({len(scorer._eval_folds)} informative folds; seed LCB {seed_score:.5f})")
+          f"({_nfolds} informative folds; seed LCB {seed_score:.5f})")
 
     bar = None
     if show:
@@ -99,6 +101,7 @@ def run_v17(
     results_dir: Optional[str] = None,
     run_slug: str = "v17_local",
     progress: bool = True,
+    fast: bool = True,
 ) -> dict:
     """Resolve a pool, build folds, and run coordinate-ascent per side."""
     era_kw = era_kw or {}
@@ -133,11 +136,25 @@ def run_v17(
     for side in sides:
         seed = (seed_from_trial_dict(seed_params[side], side)
                 if seed_params and side in seed_params else Params())
-        scorer = PooledScorer(folds=folds, streams=kept, side=side)
+        if fast:
+            scorer = FastPooledScorer(folds=folds, streams=kept, side=side, base_params=seed)
+        else:
+            scorer = PooledScorer(folds=folds, streams=kept, side=side)
         res = _ascend_with_progress(seed, scorer, side, grid_n, max_sweeps, progress)
+
+        # Science contract: report the FINAL LCB scored by the REAL detector,
+        # never the fast surrogate (which is byte-identical, but verify at runtime).
+        final_lcb = res.score
+        if fast:
+            real_final = PooledScorer(folds=folds, streams=kept, side=side).score(res.params)
+            if abs(real_final - res.score) > 1e-9:
+                logger.warning("v17 %s: fast LCB %.6f != real %.6f — reporting real",
+                               side, res.score, real_final)
+            final_lcb = real_final
+
         out["sides"][side] = {
             "seed_lcb": res.seed_score,
-            "final_lcb": res.score,
+            "final_lcb": final_lcb,
             "n_evals": res.n_evals,
             "changed": [(f, v) for f, v, _ in res.history],
             "best_params": {k: getattr(res.params, k) for k in vars(res.params)},
