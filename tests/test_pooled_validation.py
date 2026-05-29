@@ -202,3 +202,67 @@ def test_objective_skips_noninformative_folds():
         study = optuna.create_study(direction="maximize")
         study.optimize(objective, n_trials=1)
         assert study.best_value == 0.0
+
+
+# ---------------------------------------------------------------------------
+# TDD: common-era fold window (feature/v16.1-common-era-folds)
+# ---------------------------------------------------------------------------
+
+def test_common_era_eliminates_solo_folds(tmp_path):
+    """With a long SPX-like solo stream + three short streams that start ~2012,
+    every fold produced with default settings must include >= 2 streams.
+
+    Timestamps:
+    - ~2000-01-01 = 946684800   (long stream start)
+    - ~2012-01-01 = 1325376000  (short streams start)
+    """
+    import datetime
+    spx = _stream_data(tmp_path, "SPX", 12000, 946684800, 86400, "US_EQ")
+    eu  = _stream_data(tmp_path, "EU",  3500,  1325376000, 86400, "EU_EQ")
+    met = _stream_data(tmp_path, "MET", 3500,  1325376000, 86400, "METALS")
+    fx  = _stream_data(tmp_path, "FX",  3500,  1325376000, 86400, "FX")
+    folds = build_calendar_folds([spx, eu, met, fx])
+    assert len(folds) >= 1, "Expected at least 1 fold"
+    for i, fold in enumerate(folds):
+        assert len(fold) >= 2, (
+            f"Fold {i} has only {len(fold)} stream(s) — solo fold should not appear"
+        )
+
+
+def test_build_calendar_folds_start_override(tmp_path):
+    """Explicit start= override must be respected and produce >= 1 fold.
+
+    When start= is supplied explicitly, era_end clipping is not applied
+    (the user controls the window manually), so the override may produce
+    more or fewer folds than the auto case.  The key guarantee is simply
+    that it runs without error and yields at least one fold.
+    """
+    spx = _stream_data(tmp_path, "SPX", 12000, 946684800,  86400, "US_EQ")
+    eu  = _stream_data(tmp_path, "EU",  3500,  1325376000, 86400, "EU_EQ")
+    met = _stream_data(tmp_path, "MET", 3500,  1325376000, 86400, "METALS")
+    fx  = _stream_data(tmp_path, "FX",  3500,  1325376000, 86400, "FX")
+
+    folds_auto     = build_calendar_folds([spx, eu, met, fx])
+    folds_override = build_calendar_folds([spx, eu, met, fx], start="2013-01-01")
+
+    assert len(folds_override) >= 1, "start override must produce >= 1 fold"
+    assert len(folds_auto) >= 1, "auto must produce >= 1 fold"
+
+
+def test_full_history_fallback(tmp_path):
+    """If era restriction leaves 0 folds, auto-fallback to full history.
+
+    Pool: one long stream (12000 bars from 2000) + one very short stream
+    (200 bars from 2024). With eff_min=2, era_start = 2024 start, leaving
+    only ~200 bars — too few for even one fold. The fallback must rescue
+    this and return >= 1 fold (sized on the full long stream).
+    """
+    ts_2000 = 946684800    # ~2000-01-01
+    ts_2024 = 1704067200   # ~2024-01-01
+    big   = _stream_data(tmp_path, "SPX", 12000, ts_2000, 86400, "US_EQ")
+    small = _stream_data(tmp_path, "FX",  200,   ts_2024, 86400, "FX")
+    folds = build_calendar_folds([big, small])
+    assert len(folds) >= 1, (
+        "Full-history fallback must produce >= 1 fold when era restriction "
+        "yields 0 folds"
+    )

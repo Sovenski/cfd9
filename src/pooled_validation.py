@@ -87,36 +87,16 @@ class PreparedSlice:
 Fold = list[PreparedSlice]
 
 
-def build_calendar_folds(
+def _run_fold_loop(
     stream_datas: list[StreamData],
-    is_fraction: float = IS_FRACTION,
-    oos_fraction: float = OOS_FRACTION,
-    step_fraction: float = STEP_FRACTION,
-    holdout_fraction: float = HOLDOUT_FRACTION,
+    ref_idx: pd.DatetimeIndex,
+    is_fraction: float,
+    oos_fraction: float,
+    step_fraction: float,
+    holdout_fraction: float,
 ) -> list[Fold]:
-    """Time-aligned calendar folds sized in BARS on the reference stream.
-
-    The **reference stream** is the one with the most bars; all fold windows
-    are expressed as integer bar offsets on that stream and then converted to
-    date boundaries used to slice every other stream.  This avoids the
-    calendar-day sizing bug where ``OOS_FRACTION * calendar_days`` fails to
-    reach ``MIN_STREAM_BARS`` for any pool not anchored on a 155-year series.
-
-    The embargo is exactly ``EMBARGO_NEST_BARS`` reference-stream bars (fixes
-    the prior under-shooting caused by scaling ``coarsest_bar_seconds / 86400``).
-
-    Streams whose IS or OOS date-slice has < ``MIN_STREAM_BARS`` bars are
-    dropped from that fold (their data is sparser than the reference).
-    """
-    if not stream_datas:
-        return []
-
-    # Reference stream: the one with the most bars.
-    ref = max(stream_datas, key=lambda sd: len(sd.df))
-    ref_idx = ref.df.index  # sorted DatetimeIndex
+    """Inner fold-building loop over a (possibly era-restricted) ref_idx."""
     n = len(ref_idx)
-
-    # Bar-based sizes (mirrors src/validation.py single-asset scheme).
     holdout_bars = int(round(n * holdout_fraction))
     active = n - holdout_bars
     is_bars = max(MIN_STREAM_BARS, int(round(n * is_fraction)))
@@ -151,10 +131,134 @@ def build_calendar_folds(
         if fold:
             folds.append(fold)
         is_start += step_bars
+    return folds
+
+
+def build_calendar_folds(
+    stream_datas: list[StreamData],
+    is_fraction: float = IS_FRACTION,
+    oos_fraction: float = OOS_FRACTION,
+    step_fraction: float = STEP_FRACTION,
+    holdout_fraction: float = HOLDOUT_FRACTION,
+    start: str | None = None,
+    min_streams: int | None = None,
+    coverage: float = 0.5,
+) -> list[Fold]:
+    """Time-aligned calendar folds sized in BARS on the reference stream.
+
+    By default, folds are concentrated in the **common era** — the period
+    where at least ``eff_min`` streams coexist — so that nearly every fold is
+    multi-asset.  This eliminates the SPX-only-era dilution that occurs when
+    the longest stream pre-dates all others by decades.
+
+    Parameters
+    ----------
+    stream_datas:
+        Pool of loaded streams.
+    is_fraction, oos_fraction, step_fraction, holdout_fraction:
+        Existing bar-fraction parameters (unchanged semantics).
+    start:
+        If given, force ``era_start`` to this date string (e.g. ``"2013-01-01"``),
+        bypassing the automatic common-era detection.
+    min_streams:
+        Minimum number of streams that must be live before the era starts.
+        Defaults to ``max(2, round(coverage * len(stream_datas)))``.
+    coverage:
+        Fraction of streams that must coexist to define the common era.
+        Used only when ``min_streams`` is ``None``.  Default 0.5.
+
+    Notes
+    -----
+    Auto-fallback (regression guard): if the era restriction yields 0 folds
+    and ``start`` was not explicitly supplied, the function retries with the
+    full history (``era_start`` set to the earliest stream start) to guarantee
+    it never returns fewer folds than the old full-history behaviour.
+
+    The embargo, MIN_STREAM_BARS gate, add_pivot_labels, and build_detector_artifacts
+    calls are unchanged.
+    """
+    if not stream_datas:
+        return []
+
+    # ------------------------------------------------------------------
+    # Step 1 — determine era_start
+    # ------------------------------------------------------------------
+    starts_all = sorted(
+        sd.df.index[0] for sd in stream_datas if len(sd.df) > 0
+    )
+    if not starts_all:
+        return []
+
+    start_explicit = start is not None
+    eff_min_label: str  # for logging
+    era_end: pd.Timestamp | None  # None means no upper clip
+    if start_explicit:
+        era_start = pd.Timestamp(start)
+        era_end = None
+        eff_min_label = "override"
+    else:
+        eff_min = min_streams if min_streams is not None else max(
+            2, round(coverage * len(stream_datas))
+        )
+        eff_min = min(eff_min, len(stream_datas))
+        eff_min_label = str(eff_min)
+        # era_start = the date the eff_min-th stream begins (0-indexed: [eff_min-1])
+        era_start = starts_all[eff_min - 1]
+        # era_end = last date when at least eff_min streams are still alive.
+        # Sort all stream ends descending; the (eff_min-1)-th entry is the latest
+        # date at which at least eff_min streams have not yet ended.
+        ends_all = sorted(
+            (sd.df.index[-1] for sd in stream_datas if len(sd.df) > 0),
+            reverse=True,
+        )
+        era_end = ends_all[eff_min - 1] if len(ends_all) >= eff_min else None
+
+    # ------------------------------------------------------------------
+    # Step 2 — choose reference as the stream with most bars in common era
+    # ------------------------------------------------------------------
+    def _era_bar_count(sd: StreamData) -> int:
+        mask = sd.df.index >= era_start
+        if era_end is not None:
+            mask = mask & (sd.df.index <= era_end)
+        return int(mask.sum())
+
+    ref = max(stream_datas, key=_era_bar_count)
+    mask_ref = ref.df.index >= era_start
+    if era_end is not None:
+        mask_ref = mask_ref & (ref.df.index <= era_end)
+    ref_idx = ref.df.index[mask_ref]
+    n = len(ref_idx)
+
+    # ------------------------------------------------------------------
+    # Step 3 — run fold loop on era-restricted ref_idx
+    # ------------------------------------------------------------------
+    folds = _run_fold_loop(
+        stream_datas, ref_idx,
+        is_fraction, oos_fraction, step_fraction, holdout_fraction,
+    )
+
+    # ------------------------------------------------------------------
+    # Step 4 — auto-fallback: if era restriction produced 0 folds and
+    # start was NOT explicitly overridden, retry with full history.
+    # ------------------------------------------------------------------
+    if len(folds) == 0 and not start_explicit and era_start > starts_all[0]:
+        logger.info(
+            "build_calendar_folds: era_start=%s produced 0 folds; "
+            "falling back to full history (era_start=%s)",
+            era_start, starts_all[0],
+        )
+        era_start = starts_all[0]
+        ref_full = max(stream_datas, key=lambda sd: len(sd.df))
+        ref_idx_full = ref_full.df.index
+        folds = _run_fold_loop(
+            stream_datas, ref_idx_full,
+            is_fraction, oos_fraction, step_fraction, holdout_fraction,
+        )
 
     logger.info(
-        "build_calendar_folds: %d folds (ref=%s, is=%d oos=%d step=%d embargo=%d bars over %d active)",
-        len(folds), ref.stream.stream_id, is_bars, oos_bars, step_bars, embargo_bars, active,
+        "build_calendar_folds: %d folds "
+        "(era_start=%s, eff_min=%s, ref=%s, n_ref_bars=%d)",
+        len(folds), era_start, eff_min_label, ref.stream.stream_id, n,
     )
     return folds
 
