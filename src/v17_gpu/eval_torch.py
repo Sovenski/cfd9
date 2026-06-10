@@ -279,6 +279,13 @@ class TorchPhase1:
         key = (side, round(float(pct), 12))
         if key in self._agr_cache:
             return self._agr_cache[key]
+        # Bound the memo: CMA-ES proposes a FRESH pct per candidate, so an
+        # unbounded cache retains ~0.7 GB of dead tensors per generation
+        # (observed OOM trajectory on the 16-stream pool, 2026-06-10). The
+        # cache only ever pays off for repeated pcts (finalist re-scores,
+        # coordinate ascent); clearing it is value-neutral (pure memo).
+        if len(self._agr_cache) >= 64:
+            self._agr_cache.clear()
         p = self.base
         if side == "high":
             agr, _, _ = self._agreement_torch(
