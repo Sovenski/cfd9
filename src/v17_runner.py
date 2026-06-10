@@ -241,6 +241,8 @@ def run_v17_gpu(
     era_pass: Optional[bool] = None,  # external era-robustness check, if any
     tv_audit: bool = True,
     gpu_chunk: Optional[int] = None,  # RUNNER-side F9 knob (None = formula)
+    firing_penalty: float = 0.02,     # SEARCH-only anti-spray lambda (raw objective unchanged)
+    firing_cap: float = 2.0,          # tolerated weighted recall/precision ratio
 ) -> dict:
     """GPU batched search -> EXACT CPU finalist re-score -> gates -> audit (§6).
 
@@ -339,6 +341,7 @@ def run_v17_gpu(
         "search": "cma-gpu", "device": device, "scorer": "v5",
         "flip_rate": flip_rate, "top_k": cfg.top_k,
         "finalist_tol": finalist_tol,
+        "firing_penalty": firing_penalty, "firing_cap": firing_cap,
         "gpu_memory": {**mem, "budget_bytes": BUDGET_BYTES,
                        "bytes_per_candidate_bar": BYTES_PER_CANDIDATE_BAR,
                        "chunk": chunk,
@@ -350,7 +353,9 @@ def run_v17_gpu(
         seed = (seed_from_trial_dict(seed_params[side], side)
                 if seed_params and side in seed_params else Params())
         gpu = GpuPooledScorer(folds=folds, streams=kept, side=side,
-                              base_params=seed, device=device)
+                              base_params=seed, device=device,
+                              firing_penalty=firing_penalty,
+                              firing_cap=firing_cap)
         opt = _PopOptimizer(seed=seed, scorer=gpu, side=side, config=cfg)
         opt.chunk = chunk
         res = opt.run()

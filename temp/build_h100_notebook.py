@@ -116,6 +116,11 @@ GENERATIONS = 10            #@param {type:"integer"}
 SOBOL_N = 128               #@param {type:"integer"}
 TOP_K = 16                  #@param {type:"integer"}
 RNG_SEED = 42               #@param {type:"integer"}
+#@markdown **Anti-spray (search only):** penalizes candidates that fire far more
+#@markdown signal mass than they hit (weighted recall/precision > cap). Reported
+#@markdown LCBs stay RAW — this only steers the search away from overfiring.
+FIRING_PENALTY = 0.02       #@param {type:"number"}
+FIRING_CAP = 2.0            #@param {type:"number"}
 #@markdown **Fold geometry.** The centered 200-bar label window kills the first/last
 #@markdown 200 bars of every slice, so SMALL OOS slices have almost no scorable bars
 #@markdown (the default 0.03 leaves ~28 live bars -> all LCBs 0.0). Large slices:
@@ -146,6 +151,7 @@ out = run_v17_gpu(
     run_slug=run_slug,
     search_kw={"popsize": POPSIZE, "generations": GENERATIONS,
                "sobol_n": SOBOL_N, "top_k": TOP_K, "rng_seed": RNG_SEED},
+    firing_penalty=FIRING_PENALTY, firing_cap=FIRING_CAP,
     device="cuda",
 )
 print(json.dumps({s: {k: v for k, v in d.items() if k != 'trace'}
