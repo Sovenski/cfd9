@@ -1,0 +1,75 @@
+{
+  "assets": {
+    "DAX": {
+      "array_sha256": {
+        "fold0_is_signal_high": "bd50e12c55dda3ee443c1cb6d71c7bcf6351c4ec96f7bc8d6adec015d1192eea",
+        "fold0_is_signal_low": "53954bae4f690f47f74de69a4616ccc3e2f28871e2d47a5de2ee2bdcc271ca32",
+        "fold0_oos_signal_high": "fa807c957eafe34b850cb453a096df2e5899f0902a837fccd59f9aafa869fb44",
+        "fold0_oos_signal_low": "a3309e0f5e39584a7a71a522881285c1347748bad4c0ca30a7466d30c93f1d3a",
+        "fold5_oos_signal_high": "fa807c957eafe34b850cb453a096df2e5899f0902a837fccd59f9aafa869fb44",
+        "fold5_oos_signal_low": "de63711297ffa0619beecf35809b165f44d4f7cb19832784c3d310da19a30067"
+      },
+      "asset": "DAX",
+      "csv": "data/raw/DAX_1D_19700102_20260324.csv",
+      "n_bars": 6000,
+      "n_folds": 6,
+      "oos_fraction": 0.15,
+      "scores": {
+        "high": {
+          "fold_scores": [
+            0.0,
+            0.0,
+            0.0
+          ],
+          "lcb": 0.0
+        },
+        "low": {
+          "fold_scores": [
+            0.0,
+            0.0,
+            0.319636568602371,
+            0.0
+          ],
+          "lcb": 0.0
+        }
+      }
+    },
+    "SPX": {
+      "array_sha256": {
+        "fold0_is_signal_high": "bd50e12c55dda3ee443c1cb6d71c7bcf6351c4ec96f7bc8d6adec015d1192eea",
+        "fold0_is_signal_low": "67e73721185ddbed646fbc2996ffea792b3c626b6236c79a2abc3a289b10da80",
+        "fold0_oos_signal_high": "fa807c957eafe34b850cb453a096df2e5899f0902a837fccd59f9aafa869fb44",
+        "fold0_oos_signal_low": "469d158cf2249ab4c224e0343c1faf502b47794cb688719fc4eab25485acc516",
+        "fold5_oos_signal_high": "fa807c957eafe34b850cb453a096df2e5899f0902a837fccd59f9aafa869fb44",
+        "fold5_oos_signal_low": "0dcc12abc3d525dcadc97dd37aa2c08eafd7d85942724c3b1cf51f3ba55a0cd0"
+      },
+      "asset": "SPX",
+      "csv": "data/raw/SPX_1D_18710201_20260318.csv",
+      "n_bars": 6000,
+      "n_folds": 6,
+      "oos_fraction": 0.15,
+      "scores": {
+        "high": {
+          "fold_scores": [
+            0.0,
+            0.0,
+            0.0,
+            0.0
+          ],
+          "lcb": 0.0
+        },
+        "low": {
+          "fold_scores": [
+            0.0,
+            0.310566825501222,
+            0.0,
+            0.0
+          ],
+          "lcb": 0.0
+        }
+      }
+    }
+  },
+  "params": "base-gold Params()",
+  "seed": 42
+}

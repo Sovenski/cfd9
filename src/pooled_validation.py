@@ -13,6 +13,7 @@ import numpy as np
 import optuna
 import pandas as pd
 
+from .cpcv import CPCVConfig, build_cpcv_splits, reconstruct_paths
 from .detector import SpeculatorDetector, build_detector_artifacts
 from .indicators import Params
 from .pooled_scoring import StreamStat, pooled_fold_score
@@ -132,6 +133,104 @@ def _run_fold_loop(
             folds.append(fold)
         is_start += step_bars
     return folds
+
+
+@dataclasses.dataclass(frozen=True)
+class CPCVFoldMeta:
+    """Provenance of one CPCV fold: which split/test group/OOS path it is."""
+
+    split_id: int
+    test_group: int
+    path_id: int
+    is_range: tuple[int, int]    # [start, end) offsets into the ref index
+    test_range: tuple[int, int]
+
+
+def _slice_by_range(
+    df: pd.DataFrame, ref_idx: pd.DatetimeIndex, rng: tuple[int, int],
+) -> pd.DataFrame:
+    """Calendar slice of ``df`` covering ref-index offsets ``[start, end)``."""
+    a, b = rng
+    return df.loc[(df.index >= ref_idx[a]) & (df.index <= ref_idx[b - 1])]
+
+
+def _run_cpcv_loop(
+    stream_datas: list[StreamData],
+    ref_idx: pd.DatetimeIndex,
+    config: CPCVConfig | None = None,
+    holdout_fraction: float = HOLDOUT_FRACTION,
+) -> tuple[list[Fold], list[CPCVFoldMeta]]:
+    """CPCV fold-building loop ALONGSIDE ``_run_fold_loop`` (spec §4).
+
+    DEFAULT OFF: nothing in the default pipeline calls this — calendar
+    walk-forward folds remain the default everywhere.
+
+    One fold is materialized per (split, test group). Per stream, ``df_is``
+    is the LONGEST contiguous purged train range (the detector requires
+    contiguous bars) and ``df_oos`` is the test group. Slice preparation
+    (MIN_STREAM_BARS gate, reset_index, ``add_pivot_labels``,
+    ``build_detector_artifacts``) mirrors ``_run_fold_loop`` exactly, so
+    per-slice label recomputation — the existing leak guard — is unchanged.
+    """
+    config = config or CPCVConfig()
+    n = len(ref_idx)
+    holdout_bars = int(round(n * holdout_fraction))
+    active = n - holdout_bars
+    if active < config.n_groups * MIN_STREAM_BARS:
+        logger.info("_run_cpcv_loop: %d active bars too short for %d groups",
+                    active, config.n_groups)
+        return [], []
+    splits = build_cpcv_splits(active, config)
+    paths = reconstruct_paths(splits)
+    path_of = {cell: pid for pid, path in enumerate(paths) for cell in path}
+
+    folds: list[Fold] = []
+    metas: list[CPCVFoldMeta] = []
+    for sp in splits:
+        if not sp.train_ranges:
+            continue
+        is_range = max(sp.train_ranges, key=lambda r: r[1] - r[0])
+        for g, test_range in zip(sp.test_groups, sp.test_ranges):
+            fold: Fold = []
+            for sd in stream_datas:
+                df_is = _slice_by_range(sd.df, ref_idx, is_range)
+                df_oos = _slice_by_range(sd.df, ref_idx, test_range)
+                if len(df_is) < MIN_STREAM_BARS or len(df_oos) < MIN_STREAM_BARS:
+                    continue
+                df_is_r = df_is.reset_index(drop=True)
+                df_oos_r = df_oos.reset_index(drop=True)
+                add_pivot_labels(df_is_r)
+                add_pivot_labels(df_oos_r)
+                fold.append(PreparedSlice(
+                    stream=sd.stream, df_is=df_is_r, df_oos=df_oos_r,
+                    artifacts_is=build_detector_artifacts(df_is_r),
+                    artifacts_oos=build_detector_artifacts(df_oos_r),
+                ))
+            if fold:
+                folds.append(fold)
+                metas.append(CPCVFoldMeta(
+                    split_id=sp.split_id, test_group=g,
+                    path_id=path_of[(sp.split_id, g)],
+                    is_range=is_range, test_range=test_range))
+    logger.info("_run_cpcv_loop: %d folds from %d splits (%d OOS paths)",
+                len(folds), len(splits), len(paths))
+    return folds, metas
+
+
+def build_cpcv_folds(
+    stream_datas: list[StreamData],
+    config: CPCVConfig | None = None,
+    holdout_fraction: float = HOLDOUT_FRACTION,
+) -> tuple[list[Fold], list[CPCVFoldMeta]]:
+    """Opt-in purged-CPCV entry point (spec §4; default pipeline unaffected).
+
+    The reference index is the stream with the most bars, mirroring the
+    full-history fallback of ``build_calendar_folds``.
+    """
+    if not stream_datas:
+        return [], []
+    ref = max(stream_datas, key=lambda sd: len(sd.df))
+    return _run_cpcv_loop(stream_datas, ref.df.index, config, holdout_fraction)
 
 
 def build_calendar_folds(
@@ -273,7 +372,21 @@ def cluster_weights(streams: list[Stream]) -> dict[str, float]:
 
 def _stream_stat(
     df: pd.DataFrame, signals: pd.Series, side: str, weight: float,
+    mask_dead_margins: bool = False,
 ) -> StreamStat:
+    if mask_dead_margins:
+        # Spec §4: the centered structural label window (half-width
+        # EMBARGO_NEST_BARS = 200 = max(STRUCTURAL_NEST)) is undefined on the
+        # first/last 200 bars of a slice, so those margins can never contain
+        # a labelled pivot. Masking removes the dead bars from n_bars and
+        # dead-margin signals from the precision denominator. OPT-IN ONLY:
+        # the default (False) is byte-identical to the legacy behavior.
+        m = EMBARGO_NEST_BARS
+        if len(df) <= 2 * m:
+            return StreamStat(n_signals=0, tp=0, matched_pivots=0,
+                              total_pivots=0, n_bars=0, weight=weight)
+        df = df.iloc[m:-m]
+        signals = signals.iloc[m:-m]
     stats = precision_at_n_stats(signals, df[f"pivot_N{REFERENCE_N}"], side, REFERENCE_N)
     return StreamStat(
         n_signals=int(stats["n_signals"]),
@@ -294,8 +407,13 @@ def _fold_is_informative(components: dict) -> bool:
 
 def evaluate_pooled_fold(
     params: Params, side: str, fold: Fold, weights: dict[str, float],
+    mask_dead_margins: bool = False,
 ) -> tuple[float, dict[str, float]]:
-    """Run the detector per stream in a fold and return the pooled fold score."""
+    """Run the detector per stream in a fold and return the pooled fold score.
+
+    ``mask_dead_margins`` (spec §4, OPT-IN, default False = legacy behavior)
+    excludes the 200-bar dead label margins of each slice from scoring.
+    """
     sig_key = "signal_high" if side == "high" else "signal_low"
     is_stats: list[StreamStat] = []
     oos_stats: list[StreamStat] = []
@@ -303,9 +421,70 @@ def evaluate_pooled_fold(
         w = weights.get(sl.stream.stream_id, 1.0)
         det_is = SpeculatorDetector(sl.df_is, params, sl.artifacts_is).run()
         det_oos = SpeculatorDetector(sl.df_oos, params, sl.artifacts_oos).run()
-        is_stats.append(_stream_stat(sl.df_is, det_is[sig_key], side, w))
-        oos_stats.append(_stream_stat(sl.df_oos, det_oos[sig_key], side, w))
+        is_stats.append(_stream_stat(sl.df_is, det_is[sig_key], side, w,
+                                     mask_dead_margins=mask_dead_margins))
+        oos_stats.append(_stream_stat(sl.df_oos, det_oos[sig_key], side, w,
+                                      mask_dead_margins=mask_dead_margins))
     return pooled_fold_score(is_stats, oos_stats, side)
+
+
+def per_asset_high_diagnostic(
+    folds: list[Fold], params: Params, side: str = "high", alpha: float = 0.05,
+) -> dict:
+    """Per-asset-then-aggregate HIGH diagnostic (spec §4, advisory).
+
+    Runs the EXACT ``SpeculatorDetector`` on every fold's OOS slice and sums
+    raw (unweighted) match counts per asset, then across assets. The PRIMARY
+    summary for the thin (~27-event) HIGH side is the OOS event count plus a
+    wide Wilson interval on OOS precision; PBO and the selection percentile
+    are ADVISORY fields only (filled by the batched-search route, never used
+    as a gate). ``heterogeneity_flag`` marks the pooled number as a likely
+    pooling artifact when pooled precision and the median per-asset precision
+    disagree sharply. Counts are summed over fold OOS slices — walk-forward
+    OOS windows may overlap; CPCV test groups partition the timeline.
+    """
+    from .overfit_guard import wilson_interval
+    if side not in ("high", "low"):
+        raise ValueError(f"side must be 'high' or 'low', got {side!r}")
+    sig_key = f"signal_{side}"
+    col = f"pivot_N{REFERENCE_N}"
+    count_keys = ("oos_events", "n_signals", "tp", "matched_pivots")
+    counts: dict[str, dict[str, int]] = {}
+    for fold in folds:
+        for sl in fold:
+            det = SpeculatorDetector(sl.df_oos, params, sl.artifacts_oos).run()
+            st = precision_at_n_stats(det[sig_key], sl.df_oos[col], side,
+                                      REFERENCE_N)
+            acc = counts.setdefault(sl.stream.stream_id,
+                                    dict.fromkeys(count_keys, 0))
+            acc["oos_events"] += int(st["total_pivots"])
+            acc["n_signals"] += int(st["n_signals"])
+            acc["tp"] += int(st["tp"])
+            acc["matched_pivots"] += int(st["matched_pivots"])
+
+    def _entry(c: dict[str, int]) -> dict:
+        precision = c["tp"] / c["n_signals"] if c["n_signals"] > 0 else 0.0
+        lo, hi = wilson_interval(c["tp"], c["n_signals"], alpha)
+        return {**c, "precision": float(precision),
+                "wilson_low": float(lo), "wilson_high": float(hi)}
+
+    per_asset = {sid: _entry(c) for sid, c in sorted(counts.items())}
+    totals = {k: sum(c[k] for c in counts.values()) for k in count_keys} \
+        if counts else dict.fromkeys(count_keys, 0)
+    aggregate = _entry(totals)
+    precisions = [e["precision"] for e in per_asset.values()]
+    median_prec = float(np.median(precisions)) if precisions else 0.0
+    aggregate["median_asset_precision"] = median_prec
+    aggregate["heterogeneity_flag"] = bool(
+        abs(aggregate["precision"] - median_prec) > 0.25)
+    logger.info("per_asset_high_diagnostic[%s]: %d assets, %d OOS events, "
+                "pooled precision %.3f [%.3f, %.3f], median-asset %.3f",
+                side, len(per_asset), aggregate["oos_events"],
+                aggregate["precision"], aggregate["wilson_low"],
+                aggregate["wilson_high"], median_prec)
+    return {"side": side, "per_asset": per_asset, "aggregate": aggregate,
+            "primary": "event_count+wilson_interval",
+            "advisory": {"pbo": None, "selection_percentile": None}}
 
 
 def build_pooled_optuna_objective(
