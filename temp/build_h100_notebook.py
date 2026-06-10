@@ -51,7 +51,10 @@ if not REPO_DIR.exists():
 !git pull --ff-only -q
 !pip install -q -r requirements.txt pytest
 import torch
-print('repo @', end=' '); !git rev-parse --short HEAD
+import subprocess
+sha = subprocess.run(['git', 'rev-parse', '--short', 'HEAD'],
+                     capture_output=True, text=True).stdout.strip()
+print('repo @', sha)
 print('torch', torch.__version__, '| cuda:', torch.cuda.is_available(),
       '|', torch.cuda.get_device_name(0) if torch.cuda.is_available() else 'NO GPU - fix runtime type!')"""
 
