@@ -133,7 +133,13 @@ def sma(series: pd.Series, n: int) -> pd.Series:
 
 
 def atr(df: pd.DataFrame, n: int) -> pd.Series:
-    """Average true range over *n* bars."""
+    """Pine-exact ``ta.atr(n)``: Wilder RMA of true range (NOT an SMA).
+
+    ``ta.atr = ta.rma(ta.tr(true), n)`` — the RMA seeds with the SMA of the
+    first *n* TRs, then recurses ``rma[t] = (rma[t-1]*(n-1) + tr[t]) / n``.
+    The 2026-06-10 TV-export audit caught the old SMA-of-TR implementation
+    flipping the volatility vote (8 LOW signal flips over 155yr of SPX).
+    """
     prev_close = df["close"].shift(1)
     tr = pd.concat(
         [
@@ -143,12 +149,22 @@ def atr(df: pd.DataFrame, n: int) -> pd.Series:
         ],
         axis=1,
     ).max(axis=1)
-    return tr.rolling(n).mean()
+    tr_vals = tr.values.astype(np.float64)
+    out = np.full(len(tr_vals), np.nan, dtype=np.float64)
+    if len(tr_vals) >= n:
+        out[n - 1] = np.mean(tr_vals[:n])
+        for t in range(n, len(tr_vals)):
+            out[t] = (out[t - 1] * (n - 1) + tr_vals[t]) / n
+    return pd.Series(out, index=df.index)
 
 
 def stdev(series: pd.Series, n: int) -> pd.Series:
-    """Rolling standard deviation (sample, ddof=1)."""
-    return series.rolling(n).std(ddof=1)
+    """Pine-exact ``ta.stdev(n)``: POPULATION std (biased, ddof=0).
+
+    Pine's default is ``biased=true`` (divide by n); the old ddof=1 sample
+    std diverged from Pine for the "StdDev" volatility method.
+    """
+    return series.rolling(n).std(ddof=0)
 
 
 def pir_of(val: pd.Series, lb: int) -> pd.Series:
@@ -198,6 +214,40 @@ def pivot_low(series: pd.Series, n: int) -> pd.Series:
     window = 2 * n + 1
     rolled = series.rolling(window, center=True).apply(
         lambda w: 1.0 if w[n] == w.min() else 0.0, raw=True
+    )
+    return rolled.fillna(0).astype(bool)
+
+
+def pivot_high_pine(series: pd.Series, n: int) -> pd.Series:
+    """Pine-exact ``ta.pivothigh(n, n)``: ``>=`` on the LEFT, strict ``>`` on
+    the RIGHT — for tied maxima the LATER twin is the pivot.
+
+    Differs from :func:`pivot_high` (``w[n] == w.max()``, ties count BOTH
+    twins), which is kept for ground-truth LABELING only. Rule proven
+    empirically against the 2026-06-10 TV export (25,249 SPX bars, 346
+    pivots, 0 disagreements; the loose rule produced 15 phantom tie-pivots
+    and strict-both rejected 13 real ones). Detection-path baseline pivots
+    MUST use this variant — they feed the shared confirmed-pivots drift
+    stack (parity).
+    """
+    window = 2 * n + 1
+    rolled = series.rolling(window, center=True).apply(
+        lambda w: 1.0 if (w[n] >= w[:n].max() and w[n] > w[n + 1:].max()) else 0.0,
+        raw=True,
+    )
+    return rolled.fillna(0).astype(bool)
+
+
+def pivot_low_pine(series: pd.Series, n: int) -> pd.Series:
+    """Pine-exact ``ta.pivotlow(n, n)``: ``<=`` on the LEFT, strict ``<`` on
+    the RIGHT — for tied minima the LATER twin is the pivot.
+
+    See :func:`pivot_high_pine`. Detection-path baseline pivots MUST use this.
+    """
+    window = 2 * n + 1
+    rolled = series.rolling(window, center=True).apply(
+        lambda w: 1.0 if (w[n] <= w[:n].min() and w[n] < w[n + 1:].min()) else 0.0,
+        raw=True,
     )
     return rolled.fillna(0).astype(bool)
 
@@ -438,10 +488,19 @@ def precompute_matrices(
         scale_min: Minimum SMA scale (inclusive).
         scale_max: Maximum SMA scale (inclusive).
 
+    PINE-FAITHFUL (2026-06-10 TV-export audit): the Pine indicator's parity
+    shim (``pir_for_scale``) computes SMA as a ``ta.cum`` cumulative-sum
+    difference — first valid at bar ``s`` (it needs ``csum[t-s]``), one bar
+    LATER than a pandas rolling mean — and scans pir min/max over the
+    AVAILABLE (non-na) ratio bars, i.e. partial windows during warmup, with
+    ``hi != lo ? (v-lo)/(hi-lo) : 0.5``. Both matrices are float64 because
+    Pine compares float64 pir against the thresholds; a float32 matrix flips
+    edge comparisons (pir ~ 0 vs extreme ``pct_extreme``).
+
     Returns:
         (sma_matrix, pir_matrix, scales_list)
-        sma_matrix: float32, shape (n_scales, n_bars)
-        pir_matrix: float32, shape (n_scales, n_bars)
+        sma_matrix: float64, shape (n_scales, n_bars)
+        pir_matrix: float64, shape (n_scales, n_bars)
         scales_list: list of integer scales [scale_min .. scale_max]
     """
     scales_list = list(range(scale_min, scale_max + 1))
@@ -449,26 +508,42 @@ def precompute_matrices(
     n_bars = len(close)
     close_vals = close.values.astype(np.float64)
 
-    sma_matrix = np.full((n_scales, n_bars), np.nan, dtype=np.float32)
-    pir_matrix = np.full((n_scales, n_bars), np.nan, dtype=np.float32)
+    sma_matrix = np.full((n_scales, n_bars), np.nan, dtype=np.float64)
+    pir_matrix = np.full((n_scales, n_bars), np.nan, dtype=np.float64)
 
     logger.info(
         "Precomputing SMA/PIR matrices: %d scales x %d bars ...",
         n_scales, n_bars,
     )
 
-    for i, s in enumerate(scales_list):
-        # SMA
-        sma_vals = pd.Series(close_vals).rolling(s).mean().values
-        sma_matrix[i] = sma_vals.astype(np.float32)
+    # ta.cum(close): strictly sequential float64 running sum (np.cumsum is
+    # sequential for accumulate — byte-identical to Pine's bar-by-bar cum).
+    csum = np.cumsum(close_vals)
 
-        # Ratio and PIR
+    for i, s in enumerate(scales_list):
+        # SMA via cumsum difference: (cum[t] - cum[t-s]) / s, valid t >= s
+        # (Pine's sma_at(s, 0) needs the csum value BEFORE the window).
+        sma_vals = np.full(n_bars, np.nan, dtype=np.float64)
+        if s < n_bars:
+            sma_vals[s:] = (csum[s:] - csum[:-s]) / s
+        sma_matrix[i] = sma_vals
+
+        # Ratio: Pine's `sma_now > 0 ? close / sma_now : 1.0` (na stays na).
         with np.errstate(divide="ignore", invalid="ignore"):
-            ratio = close_vals / sma_vals
-        ratio_series = pd.Series(ratio)
+            ratio = np.where(sma_vals > 0, close_vals / sma_vals, 1.0)
+        ratio[np.isnan(sma_vals)] = np.nan
+
+        # PIR over the last `lb` bars, PARTIAL windows allowed (Pine skips na
+        # bars in its scan), hi == lo -> 0.5; na ratio -> na (counts as
+        # neither extreme, same as Pine's 0.5 fallback).
         pir_lb = max(s, 20)
-        pir_vals = pir_of(ratio_series, pir_lb).values
-        pir_matrix[i] = pir_vals.astype(np.float32)
+        r = pd.Series(ratio)
+        lo = r.rolling(pir_lb, min_periods=1).min().values
+        hi = r.rolling(pir_lb, min_periods=1).max().values
+        with np.errstate(divide="ignore", invalid="ignore"):
+            pir_vals = np.where(hi != lo, (ratio - lo) / (hi - lo), 0.5)
+        pir_vals[np.isnan(ratio)] = np.nan
+        pir_matrix[i] = pir_vals
 
     logger.info("Precomputation complete.")
     return sma_matrix, pir_matrix, scales_list

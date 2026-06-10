@@ -214,7 +214,7 @@ def test_tf32_and_low_precision_reductions_disabled() -> None:
 
 def test_feature_dtype_split(built) -> None:
     for name, (_, _, _, tp) in built.items():
-        assert tp.feat.pir_matrix.dtype == np.float32, name      # P1: PIR f32
+        assert tp.feat.pir_matrix.dtype == np.float64, name      # P1: PIR f64 (Pine-faithful)
         for _, feat_attr, kind in _FEATURE_ATTRS:
             arr = getattr(tp.feat, feat_attr)
             assert arr.dtype == np.dtype(kind), (name, feat_attr)
@@ -231,7 +231,7 @@ def test_pir_matrix_torch_byte_identical_on_three_slices(built) -> None:
     for name, (df, art, _, tp) in built.items():
         pir = build_pir_matrix_torch(
             df["close"], art.scales_list[0], art.scales_list[-1])
-        assert pir.dtype == np.float32, name
+        assert pir.dtype == np.float64, name
         assert np.array_equal(pir, art.pir_matrix, equal_nan=True), name
         # the evaluator's resident matrix is byte-identical too
         assert np.array_equal(tp.feat.pir_matrix, art.pir_matrix, equal_nan=True), name

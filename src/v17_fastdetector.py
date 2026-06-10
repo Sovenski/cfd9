@@ -38,8 +38,8 @@ from .indicators import (
     linreg_slope_step,
     nz,
     pir_of,
-    pivot_high,
-    pivot_low,
+    pivot_high_pine,
+    pivot_low_pine,
     sma,
     stdev,
 )
@@ -148,8 +148,8 @@ class FastDetector:
         self._price_low_ok = _to_bool((low <= low.rolling(p.price_gate_lb_low).min().shift(1)).values)
 
         # --- baseline pivot series (shape: baseline_lb) ---
-        self._ph_arr = pivot_high(high, p.baseline_lb).values
-        self._pl_arr = pivot_low(low, p.baseline_lb).values
+        self._ph_arr = pivot_high_pine(high, p.baseline_lb).values
+        self._pl_arr = pivot_low_pine(low, p.baseline_lb).values
         self._high_arr = high.values.astype(float)
         self._low_arr = low.values.astype(float)
 

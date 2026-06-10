@@ -26,8 +26,8 @@ from .indicators import (
     linreg_value,
     nz,
     pir_of,
-    pivot_high,
-    pivot_low,
+    pivot_high_pine,
+    pivot_low_pine,
     precompute_matrices,
     sma,
     stdev,
@@ -342,8 +342,8 @@ class SpeculatorDetector:
         )
 
         # --- Baseline pivot series (non-causal, used with offset) ---
-        ph_series = pivot_high(high, p.baseline_lb)
-        pl_series = pivot_low(low, p.baseline_lb)
+        ph_series = pivot_high_pine(high, p.baseline_lb)
+        pl_series = pivot_low_pine(low, p.baseline_lb)
 
         # ---------------------------------------------------------------
         # Convert all to numpy arrays before loop (performance)

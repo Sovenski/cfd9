@@ -148,10 +148,16 @@ def build_pir_matrix_torch(
     scale_max: int = 500,
     device: str = "cpu",
 ) -> np.ndarray:
-    """Float32 PIR matrix, byte-identical to ``indicators.precompute_matrices``.
+    """Float64 PIR matrix mirroring the PINE-FAITHFUL ``precompute_matrices``.
 
-    §2 winning method: internal float64 fresh-per-window rolling mean (unfold),
-    ``pir_of`` semantics on the close/SMA ratio, output cast to float32 (P1).
+    2026-06-10 TV-export audit: Pine's parity shim computes SMA as a
+    ``ta.cum`` cumulative-sum difference (first valid at bar ``s``) and scans
+    pir min/max over the AVAILABLE bars (partial warm-up windows), with
+    ``hi != lo ? (v-lo)/(hi-lo) : 0.5`` in float64. This builder mirrors that
+    construction in torch; the production path uses the numpy oracle matrix
+    from ``DetectorArtifacts`` directly, so this exists for on-device
+    validation (the Colab script measures its real-hardware flip rate, where
+    a parallel-scan cumsum may differ from numpy's sequential one).
 
     Args:
         close: close prices for ONE slice (per-slice artifact — P2).
@@ -160,19 +166,37 @@ def build_pir_matrix_torch(
         device: torch device for the build.
 
     Returns:
-        float32 array ``[n_scales, n_bars]`` (NaN on warm-up bars).
+        float64 array ``[n_scales, n_bars]`` (NaN where the SMA is invalid).
     """
     close64 = np.asarray(
         close.values if isinstance(close, pd.Series) else close, dtype=np.float64
     )
     scales = list(range(scale_min, scale_max + 1))
     n_bars = len(close64)
-    out = np.full((len(scales), n_bars), np.nan, dtype=np.float32)
+    out = np.full((len(scales), n_bars), np.nan, dtype=np.float64)
     x = torch.tensor(close64, dtype=torch.float64, device=device)
+    csum = torch.cumsum(x, dim=0)
+    posinf = torch.tensor(float("inf"), dtype=torch.float64, device=device)
+    neginf = torch.tensor(float("-inf"), dtype=torch.float64, device=device)
     for i, s in enumerate(scales):
-        sma_t = _rolling_mean_unfold(x, s)
-        ratio = x / sma_t
-        out[i] = _pir_torch(ratio, max(s, 20)).to(torch.float32).cpu().numpy()
+        # SMA via cumsum difference, valid t >= s (Pine sma_at semantics).
+        sma_t = torch.full((n_bars,), float("nan"), dtype=torch.float64, device=device)
+        if s < n_bars:
+            sma_t[s:] = (csum[s:] - csum[:-s]) / s
+        ratio = torch.where(sma_t > 0, x / sma_t, torch.ones_like(x))
+        ratio = torch.where(torch.isnan(sma_t), sma_t, ratio)  # keep NaN warm-up
+        lb = max(s, 20)
+        # Partial windows: NaN bars act as neutral (+inf for min, -inf for max),
+        # exactly Pine's na-skip scan over the last lb bars.
+        pad = lb - 1
+        v_min = torch.cat([posinf.repeat(pad), torch.where(torch.isnan(ratio), posinf, ratio)])
+        v_max = torch.cat([neginf.repeat(pad), torch.where(torch.isnan(ratio), neginf, ratio)])
+        lo = v_min.unfold(0, lb, 1).min(dim=1).values
+        hi = v_max.unfold(0, lb, 1).max(dim=1).values
+        res = torch.where(hi != lo, (ratio - lo) / (hi - lo),
+                          torch.full_like(ratio, 0.5))
+        res = torch.where(torch.isnan(ratio), ratio, res)
+        out[i] = res.cpu().numpy()
     logger.debug("torch PIR matrix built: %d scales x %d bars", len(scales), n_bars)
     return out
 

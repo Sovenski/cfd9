@@ -28,7 +28,7 @@ from typing import Sequence
 import numpy as np
 import pandas as pd
 
-from src.indicators import Params, pivot_high, pivot_low
+from src.indicators import Params, pivot_high_pine, pivot_low_pine
 
 logger = logging.getLogger(__name__)
 
@@ -197,8 +197,8 @@ def precompute_drift(df: pd.DataFrame, spec: DriftSpec) -> np.ndarray:
     df = df.reset_index(drop=True)
     high = df["high"]
     low = df["low"]
-    ph_flags = pivot_high(high, spec.baseline_lb).values
-    pl_flags = pivot_low(low, spec.baseline_lb).values
+    ph_flags = pivot_high_pine(high, spec.baseline_lb).values
+    pl_flags = pivot_low_pine(low, spec.baseline_lb).values
     ev_bars, ev_vals = confirmed_pivot_events(
         high.values.astype(float),
         low.values.astype(float),

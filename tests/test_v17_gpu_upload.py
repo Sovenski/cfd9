@@ -183,7 +183,7 @@ def test_pir_tiles_reconstruct_real_matrices_bitwise() -> None:
     covered: list[int] = []
     for (lo, hi), tile in iter_pir_tiles(pir_list, tile_scales=tile_scales):
         assert hi - lo <= tile_scales
-        assert tile.data.dtype == np.float32  # P1: PIR stays float32
+        assert tile.data.dtype == np.float64  # P1: PIR f64 (Pine-faithful)
         assert tile.data.shape == (len(pir_list), hi - lo, 420)
         covered.extend(range(lo, hi))
         for i, p in enumerate(pir_list):
