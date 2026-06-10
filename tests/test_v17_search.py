@@ -82,7 +82,9 @@ def test_sobol_within_bounds_and_shape_frozen():
     assert stages.count("cma") == cfg.generations * cfg.popsize
     assert res.n_evals == len(res.population) == 1 + cfg.sobol_n + cfg.generations * cfg.popsize
     assert scorer.n_calls == res.n_evals
-    assert res.coords == fields
+    # The LOW drift gate-mult is a dead knob (HIGH-only gate, detector.py
+    # L509/L564) and is intentionally excluded from the searched dims.
+    assert res.coords == [f for f in fields if f != "pivot_drift_gate_mult_low"]
     assert len(res.trace) == len(res.population)
 
 
