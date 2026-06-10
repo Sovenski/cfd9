@@ -109,13 +109,20 @@ from datetime import datetime
 GROUPS = "indices"          #@param {type:"string"}
 TIMEFRAMES = "1D"           #@param {type:"string"}
 SIDES = "high,low"          #@param {type:"string"}
-#@markdown **Sizing:** A100 40GB -> POPSIZE 128 · H100 80GB -> 256 · L4 22GB -> 64.
-#@markdown Run a GENERATIONS=5 pilot first to measure min/generation, then scale to 30+.
+#@markdown **Sizing (measured on L4):** ~14s/generation at POPSIZE 128 — the GPU is
+#@markdown not the bottleneck; the CPU finalist re-score tail is. L4 is sufficient.
 POPSIZE = 128               #@param {type:"integer"}
-GENERATIONS = 5             #@param {type:"integer"}
+GENERATIONS = 10            #@param {type:"integer"}
 SOBOL_N = 128               #@param {type:"integer"}
-TOP_K = 20                  #@param {type:"integer"}
+TOP_K = 16                  #@param {type:"integer"}
 RNG_SEED = 42               #@param {type:"integer"}
+#@markdown **Fold geometry.** The centered 200-bar label window kills the first/last
+#@markdown 200 bars of every slice, so SMALL OOS slices have almost no scorable bars
+#@markdown (the default 0.03 leaves ~28 live bars -> all LCBs 0.0). Large slices:
+#@markdown IS~2850 / OOS~2140 bars (~1740 live) -> ~5 real folds on the indices pool.
+IS_FRACTION = 0.20          #@param {type:"number"}
+OOS_FRACTION = 0.15         #@param {type:"number"}
+STEP_FRACTION = 0.10        #@param {type:"number"}
 
 import logging, json
 # force=True: Colab's kernel pre-installs a root handler, which makes a plain
@@ -133,6 +140,8 @@ out = run_v17_gpu(
     timeframes=[t.strip() for t in TIMEFRAMES.split(',') if t.strip()],
     data_dir=DATA_DIR,
     sides=tuple(s.strip() for s in SIDES.split(',') if s.strip()),
+    era_kw={"is_fraction": IS_FRACTION, "oos_fraction": OOS_FRACTION,
+            "step_fraction": STEP_FRACTION},
     results_dir=RESULTS_DIR,
     run_slug=run_slug,
     search_kw={"popsize": POPSIZE, "generations": GENERATIONS,
