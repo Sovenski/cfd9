@@ -69,8 +69,8 @@ import shutil
 DRIVE_ROOT = Path('/content/drive/MyDrive/cfd9')
 DATA_DIR = '/content/drive/MyDrive/cfd9/data/raw_v16'  #@param {type:"string"}
 RESULTS_DIR = '/content/drive/MyDrive/cfd9/results'    #@param {type:"string"}
-SPX_1D_CSV = '/content/drive/MyDrive/cfd9/data/raw_v16/SPX_1D_18710201_20260318.csv'  #@param {type:"string"}
-DAX_1D_CSV = '/content/drive/MyDrive/cfd9/data/raw_v16/DAX_1D_19700102_20260324.csv'  #@param {type:"string"}
+SPX_1D_CSV = '/content/drive/MyDrive/cfd9/data/raw_v16/SP_SPX, 1D_a20e0.csv'  #@param {type:"string"}
+DAX_1D_CSV = '/content/drive/MyDrive/cfd9/data/raw_v16/XETR_DLY_DAX, 1D_0ab60.csv'  #@param {type:"string"}
 
 REPO_RAW = Path('/content/cfd9/data/raw')
 REPO_RAW.mkdir(parents=True, exist_ok=True)
@@ -109,8 +109,10 @@ from datetime import datetime
 GROUPS = "indices"          #@param {type:"string"}
 TIMEFRAMES = "1D"           #@param {type:"string"}
 SIDES = "high,low"          #@param {type:"string"}
-POPSIZE = 256               #@param {type:"integer"}
-GENERATIONS = 20            #@param {type:"integer"}
+#@markdown **Sizing:** A100 40GB -> POPSIZE 128 · H100 80GB -> 256 · L4 22GB -> 64.
+#@markdown Run a GENERATIONS=5 pilot first to measure min/generation, then scale to 30+.
+POPSIZE = 128               #@param {type:"integer"}
+GENERATIONS = 5             #@param {type:"integer"}
 SOBOL_N = 512               #@param {type:"integer"}
 TOP_K = 20                  #@param {type:"integer"}
 RNG_SEED = 42               #@param {type:"integer"}
