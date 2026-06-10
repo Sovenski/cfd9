@@ -225,6 +225,28 @@ def main() -> dict:
                 time.time() - t0, pir_oracle.shape, pir_oracle.dtype)
 
     params = Params()
+
+    # PRODUCTION variant (decides the branch): the real torch builder, which
+    # mirrors the PINE-FAITHFUL oracle construction (2026-06-10 parity fix —
+    # cumsum SMA valid from bar s, partial-window pir, f64). The legacy
+    # variants below predate that fix and are kept as INFORMATIONAL baselines
+    # only; their warm-up semantics intentionally differ from the new oracle.
+    from src.v17_gpu.eval_torch import build_pir_matrix_torch
+    t0 = time.time()
+    prod = build_pir_matrix_torch(close64, SCALE_MIN, SCALE_MAX, device=str(DEVICE))
+    prod_stats = compare_matrices(prod, pir_oracle)
+    prod_stats["flips"] = flip_stats(prod, pir_oracle, scales_list, params)
+    prod_stats["build_seconds"] = round(time.time() - t0, 1)
+    logger.info(
+        "%-24s exact=%s drift=%.3e value_diffs=%d/%d nan_mismatch=%d "
+        "vote_flip=%.2e value_flip=%.2e",
+        "production-pine/f64", prod_stats["exact_match"],
+        prod_stats["max_abs_drift"], prod_stats["n_value_diffs"],
+        prod_stats["n_finite_cells"], prod_stats["n_nan_mask_mismatch"],
+        prod_stats["flips"]["max_vote_flip_rate"],
+        prod_stats["flips"]["max_value_flip_rate"],
+    )
+
     variants: dict[str, tuple[Callable, torch.dtype]] = {
         "cumsum-difference/f32": (_rolling_mean_cumsum, torch.float32),
         "cumsum-difference/f64": (_rolling_mean_cumsum, torch.float64),
@@ -264,7 +286,9 @@ def main() -> dict:
     best_cumsum_name, best_cumsum = best_variant("cumsum-difference")
     best_pandas_name, best_pandas = best_variant("pandas-faithful")
 
+    results["production-pine/f64"] = prod_stats
     candidates = [
+        ("production-pine-faithful", "production-pine/f64", prod_stats),
         ("cumsum-difference", best_cumsum_name, best_cumsum),
         ("pandas-faithful", best_pandas_name, best_pandas),
     ]
