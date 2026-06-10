@@ -123,7 +123,7 @@ from src.v17_runner import run_v17_gpu
 
 run_slug = f"v17gpu_{datetime.now().strftime('%Y%m%d_%H%M%S')}"
 out = run_v17_gpu(
-    groups=[g.strip() for g in GROUPS.split(',') if g.strip()],
+    groups=[g.strip().upper() for g in GROUPS.split(',') if g.strip()],
     timeframes=[t.strip() for t in TIMEFRAMES.split(',') if t.strip()],
     data_dir=DATA_DIR,
     sides=tuple(s.strip() for s in SIDES.split(',') if s.strip()),
@@ -138,16 +138,25 @@ print(json.dumps({s: {k: v for k, v in d.items() if k != 'trace'}
 print('written ->', out.get('_written'))'''
 
 CELL_INSPECT = """# Cell 6 - Inspect winners (Pine-ready params)
-# Prints per-side winner LCB + the changed thresholds vs the gold preset.
-from src.indicators import Params
-gold = Params()
+# Per side: seed->final LCB (raw + deflated), gate verdict, boundary pins,
+# and the thresholds the optimizer changed vs the seed ('changed' is the
+# runner's authoritative diff). best_params holds the FULL Pine-ready set.
 for side, d in out.get('sides', {}).items():
-    best = d.get('best_params', {})
-    print(f"=== {side.upper()}  final_lcb={d.get('final_lcb')}  gates={d.get('acceptance', {}).get('verdict', 'n/a')} ===")
-    for k, v in sorted(best.items()):
-        g = getattr(gold, k, None)
-        if g is not None and v != g and k.endswith(('_' + side,)):
-            print(f"  {k:38s} {g!r:>12}  ->  {v!r}")"""
+    acc = d.get('acceptance', {})
+    print(f"=== {side.upper()} ===")
+    print(f"  LCB: seed {d.get('seed_lcb'):.5f} -> final {d.get('final_lcb'):.5f}"
+          f"  (deflated {d.get('final_lcb_deflated'):.5f})")
+    print(f"  gates: {acc.get('verdict', 'n/a')}   boundary-pinned: {acc.get('pinned') or 'none'}")
+    print(f"  finalists kept/dropped: {d.get('n_finalists')}/{d.get('n_dropped_finalists')}"
+          f"   evals: {d.get('n_evals')}")
+    changed = d.get('changed', [])
+    if not changed:
+        print('  changed thresholds: none (seed already optimal on this pool)')
+    for f, v in changed:
+        print(f"  {f:38s} -> {v!r}")
+    if side == 'high' and 'per_asset_diagnostic' in d:
+        print('  HIGH per-asset diagnostic (advisory):',
+              d['per_asset_diagnostic'].get('advisory'))"""
 
 
 def _code(src: str) -> dict:
