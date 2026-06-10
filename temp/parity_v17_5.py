@@ -232,21 +232,22 @@ def main(argv: Sequence[str]) -> int:
 
     # The v17-GPU Run 1 preset — identical to the 2026-06-10 audit. Replace
     # with the winner Params when auditing a new run.
+    # "INDICES 1D 2026-06-10 v5 Run" — the v5 winner preset in the export.
     params = Params(
-        pct_extreme_high=0.554436424188316,
-        min_agreement_high=0.47057701572775845,
-        dur_extreme_pct_high=0.6388478276878595,
-        scale_div_thresh_high=0.23202978018671275,
-        pivot_drift_thresh_high=0.02970966456271708,
-        pivot_drift_gate_mult_high=4.846518321894109,
-        momentum_velocity_thresh_high=0.0109414285980165,
-        pct_extreme_low=0.9898309362374363,
-        min_agreement_low=0.10161243349676918,
-        dur_extreme_pct_low=0.8481916445277483,
-        scale_div_thresh_low=0.24889258429931752,
-        pivot_drift_thresh_low=0.013284897982313939,
-        momentum_velocity_thresh_low=0.007715178292267143,
-        vola_high_pct_low=0.7099270056620911,
+        pct_extreme_high=0.6449214841548585,
+        min_agreement_high=0.10235877088821599,
+        dur_extreme_pct_high=0.3067583081621106,
+        scale_div_thresh_high=0.5648265369823214,
+        pivot_drift_thresh_high=0.033380017630768956,
+        pivot_drift_gate_mult_high=8.126706097454868,
+        momentum_velocity_thresh_high=0.000406850442654248,
+        pct_extreme_low=0.7089677498942575,
+        min_agreement_low=0.31741163082602114,
+        dur_extreme_pct_low=0.5054146427804495,
+        scale_div_thresh_low=0.20622631913042141,
+        pivot_drift_thresh_low=0.015082698670489024,
+        momentum_velocity_thresh_low=0.0005828514910812214,
+        vola_high_pct_low=0.7609491744714391,
     )
 
     tv = _load_tv_export(export)

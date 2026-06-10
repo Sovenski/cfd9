@@ -1,0 +1,198 @@
+{
+ "high": {
+  "calibration": {
+   "grid": [
+    20.0,
+    30.0,
+    40.0,
+    50.0,
+    70.0,
+    100.0,
+    140.0,
+    200.0,
+    300.0,
+    500.0
+   ],
+   "S_R": [
+    0.11758241758241758,
+    0.0923076923076923,
+    0.06813186813186811,
+    0.06263736263736262,
+    0.045054945054945054,
+    0.03516483516483515,
+    0.030769230769230767,
+    0.026373626373626374,
+    0.018681318681318684,
+    0.009890109890109893
+   ],
+   "S_lo": [
+    0.0964187250389422,
+    0.07332877604166668,
+    0.05455702853677916,
+    0.04958342753313739,
+    0.03381532676119885,
+    0.02678387713109938,
+    0.022352049108956884,
+    0.01869675479582969,
+    0.012092274801250616,
+    0.005138087557127201
+   ],
+   "S_hi": [
+    0.13661969302576063,
+    0.11150342712842713,
+    0.08177700221761738,
+    0.07578472587143105,
+    0.05480506954805069,
+    0.04148784424619309,
+    0.03802259277635164,
+    0.03318670492256638,
+    0.023720349563046195,
+    0.015191762233195938
+   ],
+   "band_method": "block",
+   "n_boot": 200,
+   "seed": 42,
+   "c_side": {
+    "c": 2.0964048804686652,
+    "r_squared": -0.24944680817448983,
+    "n_fit": 119,
+    "use_fallback": true,
+    "fallback_median": 0.032346773916331596
+   },
+   "expected_hold_at_fire": 13.2,
+   "clock_bars": 13,
+   "conviction_breakpoints": [
+    0.0,
+    0.0020261166079460447,
+    0.0020261166079460447,
+    0.0020261166079460447,
+    0.0020261166079460447,
+    0.0020261166079460447,
+    0.0020261166079460447,
+    0.0020261166079460447,
+    0.0020261166079460447,
+    0.0020261166079460447,
+    0.0020261166079460447
+   ],
+   "stop_rule": {
+    "match_window": 1,
+    "fire_stop": "min(low[t-1], low[t])",
+    "widen_once_at_t_plus_1": true,
+    "t_plus_1_breach": "close_vs_fire_stop",
+    "final_from": "t_plus_2_intrabar",
+    "k_origin": "candidate_pivot_bar"
+   },
+   "n_signals": 910,
+   "n_streams": 3,
+   "degenerate": false,
+   "fit_diagnostics": {
+    "r2": null,
+    "censored_excluded_n": 4,
+    "band_method": "block",
+    "grid_floor_bias_note": "span weights and E[hold] are grid-floor biased (conservative, downward): N* records the largest grid value passed, truncating by at most one grid step; the top bucket 500 is '500+' (right-censored at the cap)",
+    "c_side_bias_note": "censored-span matched signals are excluded from the c_side regression; this truncates the longest swings and biases c_side downward",
+    "in_sample_disclaimer": "probabilities are calibrated on this instrument's history; card values shown on historical bars are in-sample; only forward bars (after the calibration run date) are out-of-sample",
+    "conditional_on_match": true,
+    "expected_move_units": "fraction_of_pivot_price"
+   }
+  }
+ },
+ "low": {
+  "calibration": {
+   "grid": [
+    20.0,
+    30.0,
+    40.0,
+    50.0,
+    70.0,
+    100.0,
+    140.0,
+    200.0,
+    300.0,
+    500.0
+   ],
+   "S_R": [
+    0.28571428571428564,
+    0.23701298701298695,
+    0.21753246753246747,
+    0.20124633431085037,
+    0.19134897360703806,
+    0.17815249266862165,
+    0.14846041055718473,
+    0.14186217008797652,
+    0.1152859237536657,
+    0.1016098484848485
+   ],
+   "S_lo": [
+    0.2674248163017953,
+    0.20922768349129378,
+    0.19095248972133408,
+    0.18181818181818193,
+    0.1737564315176256,
+    0.155740884789645,
+    0.1266530825496343,
+    0.11813519871098167,
+    0.0922975708502024,
+    0.07584308230769649
+   ],
+   "S_hi": [
+    0.30337796604085143,
+    0.2639636752136752,
+    0.24364289372431075,
+    0.22403463973748675,
+    0.21310846115420684,
+    0.20253874411663422,
+    0.17284414740555099,
+    0.16580705960965414,
+    0.1392551816279729,
+    0.1282125528087724
+   ],
+   "band_method": "block",
+   "n_boot": 200,
+   "seed": 42,
+   "c_side": {
+    "c": 1.1710774622188747,
+    "r_squared": -0.2974920999134749,
+    "n_fit": 91,
+    "use_fallback": true,
+    "fallback_median": 0.10858537747082646
+   },
+   "expected_hold_at_fire": 67.7,
+   "clock_bars": 68,
+   "conviction_breakpoints": [
+    0.02185240917576382,
+    0.02185240917576382,
+    0.02185240917576382,
+    0.02185240917576382,
+    0.02185240917576382,
+    0.02185240917576382,
+    0.02185240917576382,
+    0.02185240917576382,
+    0.02185240917576382,
+    0.02185240917576382,
+    0.02185240917576382
+   ],
+   "stop_rule": {
+    "match_window": 1,
+    "fire_stop": "min(low[t-1], low[t])",
+    "widen_once_at_t_plus_1": true,
+    "t_plus_1_breach": "close_vs_fire_stop",
+    "final_from": "t_plus_2_intrabar",
+    "k_origin": "candidate_pivot_bar"
+   },
+   "n_signals": 308,
+   "n_streams": 3,
+   "degenerate": false,
+   "fit_diagnostics": {
+    "r2": null,
+    "censored_excluded_n": 4,
+    "band_method": "block",
+    "grid_floor_bias_note": "span weights and E[hold] are grid-floor biased (conservative, downward): N* records the largest grid value passed, truncating by at most one grid step; the top bucket 500 is '500+' (right-censored at the cap)",
+    "c_side_bias_note": "censored-span matched signals are excluded from the c_side regression; this truncates the longest swings and biases c_side downward",
+    "in_sample_disclaimer": "probabilities are calibrated on this instrument's history; card values shown on historical bars are in-sample; only forward bars (after the calibration run date) are out-of-sample",
+    "conditional_on_match": true,
+    "expected_move_units": "fraction_of_pivot_price"
+   }
+  }
+ }
+}

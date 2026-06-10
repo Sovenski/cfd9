@@ -116,7 +116,9 @@ high_keys = [
     ("momentum_velocity_thresh_high", "momentum_velocity_thresh"),
     ("vola_method_high", "vola_method"),
 ]
-low_keys = [(h.replace("_high", "_low"), key) for h, key in high_keys]
+# Suffix-only replace: "vola_high_pct_high" must become "vola_high_pct_low",
+# NOT "vola_low_pct_low" (a full replace() mangled it — 2026-06-11 audit bug).
+low_keys = [(h[: -len("_high")] + "_low", key) for h, key in high_keys]
 
 out_lines = []
 hits = 0
