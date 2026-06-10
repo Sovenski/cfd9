@@ -202,6 +202,11 @@ def boundary_pinned(changed: list[tuple[str, float]], side: str,
     suffix = f"_{side}"
     pinned: list[tuple[str, str]] = []
     for field, value in changed:
+        # Dead knob: the drift GATE exists only on the HIGH side (detector.py
+        # L509/L564 — gate_l never reads it), so a "pin" on the LOW gate-mult
+        # is random drift of a no-op parameter, not a looseness signal.
+        if field == "pivot_drift_gate_mult_low":
+            continue
         base = field[: -len(suffix)] if field.endswith(suffix) else field
         if base not in fb:
             continue

@@ -110,7 +110,14 @@ class BatchOptimizer:
         self.scorer = scorer
         self.side = side
         self.config = config or BatchSearchConfig()
-        self.fields: list[str] = active_threshold_fields(seed, side)
+        # The drift GATE exists only on the HIGH side (detector.py L509/L564
+        # — gate_l never reads it), so pivot_drift_gate_mult_low is a dead
+        # knob: searching it wastes a dimension and its boundary "pins" are
+        # spurious reject triggers.
+        self.fields: list[str] = [
+            f for f in active_threshold_fields(seed, side)
+            if f != "pivot_drift_gate_mult_low"
+        ]
         fb = space_for(side).float_bounds
         suffix_len = len(side) + 1
         self._lo = np.array([fb[f[:-suffix_len]][0] for f in self.fields], dtype=float)
