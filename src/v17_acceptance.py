@@ -35,9 +35,14 @@ if TYPE_CHECKING:  # pragma: no cover - typing only, avoids import cycles
 def firing_excess(precision: float, recall: float, cap: float = 2.0) -> float:
     """Per-fold firing penalty: max(0, (recall/precision) - cap).
 
-    recall/precision == n_signals/total_pivots, so this penalizes folds that fire
-    more than ``cap`` signals per structural pivot (the gate-loosening mechanism).
-    precision==0 with any recall => pure false-positive spray => large penalty.
+    The ratio measures firing intensity per available pivot credit, so this
+    penalizes folds that fire more than ``cap`` signals per pivot unit (the
+    gate-loosening mechanism). precision==0 with any recall => pure
+    false-positive spray => large penalty.
+
+    Scorer v5 (spec §2.2): the inputs are the WEIGHTED ``precision_oos`` /
+    ``recall_oos`` span-mass quantities from ``pooled_fold_score``; the
+    function FORM is input-agnostic and unchanged.
     """
     ratio = float(recall) / max(float(precision), 1e-9)
     return max(0.0, ratio - float(cap))

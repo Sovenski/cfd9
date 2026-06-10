@@ -209,8 +209,93 @@ for side, d in out.get("sides", {}).items():
 if out.get("tv_audit") is not None:
     A("")
     A(f"tv_audit hook: {_json.dumps(out['tv_audit'], default=str)[:400]}")
+
+# --- SCORER v5 — CALIBRATION + SIGNAL CARD REPORT (spec FIXED v3 §5) -------
+_DISCLAIMER = "probabilities are calibrated on this instrument's history; card values shown on historical bars are in-sample; only forward bars (after the calibration run date) are out-of-sample"
+A("")
+A("=" * 78)
+A(f"SCORER v5 — CALIBRATION + SIGNAL CARD REPORT (scorer={out.get('scorer')})")
+A("=" * 78)
+A("NOTE (spec §2.4): scorer-v5 fold counts differ from v4 runs — the")
+A("informative-fold filter is pivot-MASS based, so more folds qualify.")
+A("NOTE (spec §2.5): all v4 LCBs are INCOMPARABLE to v5 LCBs (new objective")
+A("era); never rank a v4 number against the LCBs above.")
+for side, d in out.get("sides", {}).items():
+    cal = d.get("calibration") or {}
+    if not cal:
+        continue
+    fd = cal.get("fit_diagnostics") or {}
+    cs = cal.get("c_side") or {}
+    bt = d.get("r_multiple_backtest") or {}
+    tr = d.get("trace") or {}
+    A("")
+    A("-" * 78)
+    A(f"{side.upper()} calibration  (block hash {str(tr.get('calibration_block_hash'))[:16]}…)")
+    A("-" * 78)
+    A(f"pool:       {cal.get('n_signals')} signals / {cal.get('n_streams')} streams"
+      f"   band={cal.get('band_method')} (n_boot={cal.get('n_boot')}, seed={cal.get('seed')})")
+    A(f"S_R grid:   {cal.get('grid')}")
+    A(f"S_R:        {[_f(v, 3) for v in (cal.get('S_R') or [])]}")
+    A(f"band lo:    {[_f(v, 3) for v in (cal.get('S_lo') or [])]}")
+    A(f"band hi:    {[_f(v, 3) for v in (cal.get('S_hi') or [])]}")
+    A(f"c_side:     c={_f(cs.get('c'))} R2={_f(cs.get('r_squared'), 3)} n_fit={cs.get('n_fit')}"
+      f" fallback={cs.get('use_fallback')} median={_f(cs.get('fallback_median'))}")
+    A(f"span clock: E[hold at fire]={_f(cal.get('expected_hold_at_fire'), 1)}"
+      f" -> clock_bars={cal.get('clock_bars')}")
+    A(f"backtest:   capture_ratio={_f(bt.get('capture_ratio'), 3)}"
+      f" expectancy={_f(bt.get('expectancy'), 3)}R win_rate={_f(bt.get('win_rate'), 3)}"
+      f" n_trades={bt.get('n_trades')} total_r={_f(bt.get('total_r'), 2)} (costs ignored)")
+    A(f"honesty:    {fd.get('grid_floor_bias_note')}")
+    A(f"            {fd.get('c_side_bias_note')}")
+    cards = d.get("signal_cards") or []
+    A("")
+    A(f"last {min(10, len(cards))} signal cards (of {len(cards)}):")
+    A(f"  {'bar':>6s} {'stream':<12s} {'match':>5s} {'tier':>4s} {'span':>5s}"
+      f" {'R':>7s} {'outcome':<16s} {'conv':>6s}")
+    for c in cards[-10:]:
+        _conv = c.get('conviction')
+        A(f"  {c.get('fire_bar'):>6} {str(c.get('stream'))[:12]:<12s}"
+          f" {str(bool(c.get('matched'))):>5s} {str(c.get('tier')):>4s}"
+          f" {c.get('realized_span'):>5} {_f(c.get('r_multiple'), 2):>7s}"
+          f" {str(c.get('outcome')):<16s}"
+          f" {(_f(_conv, 0) if _conv is not None else 'n/a'):>6s}")
+A("")
+A("CARD LEGEND: P(T2+)/P(T1) are cluster-bootstrap BANDS (5th-95th pct, F6),")
+A("never point values; move = expected move if this is a real turn")
+A("(conditional on match, R3); hold = span-clock E[hold]; stop = candidate")
+A("pivot low (H0 — a breach definitionally refutes the matched-pivot")
+A("hypothesis).")
+A(f"IN-SAMPLE DISCLAIMER (F7): {_DISCLAIMER}.")
 report = "\\n".join(L)
 print(report)'''
+
+CELL_WRITE_PINE = '''#@title Cell 7 (optional) - Write calibrated Pine v17.5 to Drive  { display-mode: "form" }
+#@markdown Builds `pine/speculatores_v17_5_signalcard.pine` from THIS run's
+#@markdown results JSON (the scorer-v5 calibration block) via
+#@markdown `temp/build_pine_v17_5.py` and copies it to `RESULTS_DIR` for
+#@markdown download. Paste into TradingView, export the chart CSV, then run
+#@markdown `temp/parity_v17_5.py` (the §4.2 audit: signals exact, card
+#@markdown numerics atol 1e-6, stop level exact).
+import shutil, subprocess, sys
+from pathlib import Path
+
+run_json = Path(out['_written'])  # Cell 5 must have written the results JSON
+pine_out = Path('pine/speculatores_v17_5_signalcard.pine')
+res = subprocess.run(
+    [sys.executable, 'temp/build_pine_v17_5.py',
+     '--run-json', str(run_json), '--out', str(pine_out)],
+    capture_output=True, text=True)
+print(res.stdout)
+if res.returncode != 0:
+    print(res.stderr)
+    raise RuntimeError('build_pine_v17_5 failed — see stderr above '
+                       '(a side missing/degenerate? rerun Cell 5 with '
+                       'SIDES="high,low")')
+dst = Path(RESULTS_DIR) / pine_out.name
+shutil.copy(pine_out, dst)
+print('wrote', dst)
+print('NEXT: paste into TradingView -> export chart CSV -> '
+      'python temp/parity_v17_5.py <export.csv> <run json>')'''
 
 
 def _code(src: str) -> dict:
@@ -231,6 +316,7 @@ nb = {
         _code(CELL_VALIDATE),
         _code(CELL_RUN),
         _code(CELL_INSPECT),
+        _code(CELL_WRITE_PINE),
     ],
     "metadata": {
         "kernelspec": {"display_name": "Python 3", "name": "python3"},

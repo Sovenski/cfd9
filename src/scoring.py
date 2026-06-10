@@ -216,13 +216,19 @@ def label_structural_pivots(
 
 
 def add_pivot_labels(df: pd.DataFrame) -> pd.DataFrame:
-    """Add structural pivot labels to *df*.
+    """Add structural pivot labels AND v5 span labels to *df*.
 
     Scorer v4: writes a single column ``pivot_N{REFERENCE_N}`` containing
     the nested-scale structural-pivot label. The column name is preserved
     so downstream consumers (``compute_side_score``, ``precision_at_n_stats``)
     do not need API changes — they simply iterate over ``PIVOT_SCALES =
     [REFERENCE_N]`` and read the structural column.
+
+    Scorer v5 (spec §1.2): additionally writes the continuous-span columns
+    ``pivot_span_{high,low}`` and ``pivot_span_censored_{high,low}`` via
+    ``scoring_v5.label_pivot_spans`` (which reuses ``label_pivots`` per grid
+    scale verbatim). ``pivot_N{REFERENCE_N}`` is RETAINED for backward
+    compatibility (spec §1.2 retention rule).
     """
     for N in PIVOT_SCALES:
         col = f"pivot_N{N}"
@@ -232,6 +238,12 @@ def add_pivot_labels(df: pd.DataFrame) -> pd.DataFrame:
                 "Added column %s (Scorer v4 structural nest %s)",
                 col, STRUCTURAL_NEST,
             )
+    if "pivot_span_low" not in df.columns:
+        from .scoring_v5 import label_pivot_spans  # lazy: avoids import cycle
+        span_df = label_pivot_spans(df)
+        for col in span_df.columns:
+            df[col] = span_df[col]
+        logger.info("Added v5 span columns %s", list(span_df.columns))
     return df
 
 
@@ -636,6 +648,28 @@ def fold_score_low(
     return _fold_score(
         df_is, df_oos, sig_is, sig_oos, "low", return_components=return_components
     )
+
+
+# ---------------------------------------------------------------------------
+# Scorer v5 re-exports (lazy PEP 562 forwarding — public surface stays here)
+# ---------------------------------------------------------------------------
+
+_V5_EXPORTS: tuple[str, ...] = (
+    "SPAN_GRID", "W_FP", "REFERENCE_MASS", "MATCH_WINDOW", "TIEBREAK_EPS",
+    "WeightedStats", "span_weight", "label_pivot_spans", "compute_left_span",
+    "match_signals_weighted", "weighted_precision", "weighted_recall",
+    "recall_target_eff", "compute_side_score_v5",
+)
+
+
+def __getattr__(name: str):
+    """Forward Scorer-v5 names to ``src.scoring_v5`` (impl plan §0 file-size
+    note): the v5 core lives in its own module to respect the line budget,
+    but ``from src.scoring import SPAN_GRID`` keeps working."""
+    if name in _V5_EXPORTS:
+        from . import scoring_v5
+        return getattr(scoring_v5, name)
+    raise AttributeError(f"module {__name__!r} has no attribute {name!r}")
 
 
 # ---------------------------------------------------------------------------

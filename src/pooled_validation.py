@@ -20,6 +20,7 @@ from .pooled_scoring import StreamStat, pooled_fold_score
 from .scoring import (
     REFERENCE_N, STRUCTURAL_NEST, add_pivot_labels, precision_at_n_stats,
 )
+from .scoring_v5 import match_signals_weighted
 from .universe import Stream
 from .validation import fold_scores_bootstrap_ci, load_data
 from .volume_quality import REAL_FLOOR, VolumeQuality, profile_volume
@@ -374,6 +375,13 @@ def _stream_stat(
     df: pd.DataFrame, signals: pd.Series, side: str, weight: float,
     mask_dead_margins: bool = False,
 ) -> StreamStat:
+    """Per-stream Scorer-v5 span-mass match statistics (spec §2.1-§2.3).
+
+    Matches the stream's signals against the side's ``pivot_span_{side}``
+    column (±1 direct hit, larger-span tie-break) and carries the weighted
+    masses into ``StreamStat`` for pooled aggregation. Count fields are kept
+    as diagnostics (1:1 matching ⇒ ``tp == matched_pivots``).
+    """
     if mask_dead_margins:
         # Spec §4: the centered structural label window (half-width
         # EMBARGO_NEST_BARS = 200 = max(STRUCTURAL_NEST)) is undefined on the
@@ -387,22 +395,28 @@ def _stream_stat(
                               total_pivots=0, n_bars=0, weight=weight)
         df = df.iloc[m:-m]
         signals = signals.iloc[m:-m]
-    stats = precision_at_n_stats(signals, df[f"pivot_N{REFERENCE_N}"], side, REFERENCE_N)
+    spans = df[f"pivot_span_{side}"]
+    ws = match_signals_weighted(signals, spans)
+    n_matched = int(ws.n_signals - ws.n_unmatched)
     return StreamStat(
-        n_signals=int(stats["n_signals"]),
-        tp=int(stats["tp"]),
-        matched_pivots=int(stats["matched_pivots"]),
-        total_pivots=int(stats["total_pivots"]),
+        n_signals=int(ws.n_signals),
+        tp=n_matched,
+        matched_pivots=n_matched,
+        total_pivots=int((spans.to_numpy() > 0).sum()),
         n_bars=len(df),
         weight=weight,
+        tp_mass=float(ws.tp_mass),
+        total_mass=float(ws.total_mass),
+        n_unmatched=int(ws.n_unmatched),
     )
 
 
 def _fold_is_informative(components: dict) -> bool:
     """A fold informs the side objective only if its pooled OOS contains
-    at least one structural pivot of that side (else its score is a forced
-    zero that only dilutes the bootstrap LCB)."""
-    return float(components.get("pooled_total_pivots_oos", 0.0)) > 0.0
+    any pivot MASS of that side (Scorer v5, spec §2.4 — replaces the v4
+    structural-pivot count check; a zero-mass fold's score is a forced zero
+    that only dilutes the bootstrap LCB)."""
+    return float(components.get("pooled_total_mass_oos", 0.0)) > 0.0
 
 
 def evaluate_pooled_fold(
@@ -499,10 +513,11 @@ def build_pooled_optuna_objective(
     in ``pooled_side_score``; temporal overlap between adjacent folds is handled
     by the block bootstrap (block_len=2), same as the single-asset objective.
 
-    Folds whose pooled OOS contains zero structural pivots of the requested
-    side are excluded: their score is a forced zero regardless of params and
-    would only pin the bootstrap-LCB near zero without providing signal.
-    If no fold is informative, the trial returns 0.0 without crashing.
+    Folds whose pooled OOS contains zero pivot mass of the requested side
+    (Scorer v5, spec §2.4) are excluded: their score is a forced zero
+    regardless of params and would only pin the bootstrap-LCB near zero
+    without providing signal. If no fold is informative, the trial returns
+    0.0 without crashing.
     """
     if side not in ("high", "low"):
         raise ValueError(f"side must be 'high' or 'low', got {side!r}")

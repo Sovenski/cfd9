@@ -240,18 +240,38 @@ def run_v17_gpu(
     device: str = "cpu",
     era_pass: Optional[bool] = None,  # external era-robustness check, if any
     tv_audit: bool = True,
+    gpu_chunk: Optional[int] = None,  # RUNNER-side F9 knob (None = formula)
 ) -> dict:
     """GPU batched search -> EXACT CPU finalist re-score -> gates -> audit (§6).
 
-    Pipeline per side: ``GpuPooledScorer.score_pop`` evaluates the whole
-    Sobol+CMA population in ONE segmented scan; the top-K finalists (K sized
+    Pipeline per side: ``GpuPooledScorer.score_pop`` evaluates the Sobol+CMA
+    population in F9-chunked segmented scans; the top-K finalists (K sized
     to the §2 flip rate unless ``search_kw['top_k']`` overrides) are re-scored
     by the EXACT ``SpeculatorDetector``+``PooledScorer``; ``filter_finalists``
     HARD-drops any finalist whose GPU LCB disagrees beyond ``finalist_tol``;
     ``v17_acceptance`` gates run on the winner; ``tv_export_audit`` records
     per-asset Pine parity. Every reported number is the CPU detector's.
+
+    Scorer v5 (spec §5): the output gains ``scorer: "v5"`` plus per-side
+    ``calibration``, ``signal_cards``, ``r_multiple_backtest`` and a
+    ``trace`` with ``scorer_version``/``calibration_block_hash``.
+
+    L4 memory (spec §6/F9): ``src/v17_gpu/**`` is FROZEN and exposes no
+    chunk knob, so chunking is applied at the RUNNER level by partitioning
+    the candidate list around the unchanged ``score_pop``
+    (``chunked_score_pop`` — byte-identical by tests/test_gpu_memory.py).
+    ``gpu_chunk`` overrides the deterministic formula; there is NO adaptive
+    OOM-retry logic anywhere.
     """
     from .overfit_guard import deflated_best
+    from .v17_card.calibration import calibrate_for_run
+    from .v17_card.gpu_memory import (
+        BUDGET_BYTES,
+        BYTES_PER_CANDIDATE_BAR,
+        chunk_size,
+        chunked_score_pop,
+        estimate_from_folds,
+    )
     from .v17_gpu.phase2_scan import GpuPooledScorer   # torch stays optional
     from .v17_search import BatchOptimizer, BatchSearchConfig
 
@@ -259,10 +279,13 @@ def run_v17_gpu(
         raise ValueError(f"sides must be 'high'|'low', got {sides!r}")
 
     class _PopOptimizer(BatchOptimizer):
-        """BatchOptimizer whose batch eval is ONE ``score_pop`` call."""
+        """BatchOptimizer whose batch eval is F9-chunked ``score_pop`` calls."""
+
+        chunk: int = 1  # set from the F9 formula below, before .run()
 
         def _score_batch(self, candidates: list[Params]) -> list[float]:
-            return [float(s) for s in self.scorer.score_pop(candidates)]
+            return [float(s) for s in chunked_score_pop(
+                self.scorer.score_pop, candidates, self.chunk)]
 
     era_kw = era_kw or {}
     streams = resolve_streams(groups, timeframes, data_dir=data_dir)
@@ -287,20 +310,50 @@ def run_v17_gpu(
     kw = dict(search_kw or {})
     kw.setdefault("top_k", topk_for_flip_rate(flip_rate))
     cfg = BatchSearchConfig(**kw)
+
+    # Spec §6/F9 — deterministic memory estimate + candidate chunk, logged
+    # at run start. HARD warn above the 14 GiB budget; never OOM-retry.
+    mem = estimate_from_folds(folds, popsize=cfg.popsize)
+    chunk = (int(gpu_chunk) if gpu_chunk is not None else chunk_size(
+        BUDGET_BYTES, mem["n_lanes"], mem["max_bars"],
+        BYTES_PER_CANDIDATE_BAR, cfg.popsize))
+    logger.info(
+        "gpu memory estimate: pool=%.2f GB + work=%.2f GB = %.2f GB "
+        "(n_lanes=%d, max_bars=%d, popsize=%d, bpc=%d B/bar) -> chunk=%d "
+        "(budget %.1f GiB%s)",
+        mem["pool_bytes"] / 1e9, mem["work_bytes"] / 1e9,
+        mem["total_bytes"] / 1e9, mem["n_lanes"], mem["max_bars"],
+        cfg.popsize, BYTES_PER_CANDIDATE_BAR, chunk,
+        BUDGET_BYTES / 1024 ** 3,
+        ", OVERRIDDEN by gpu_chunk" if gpu_chunk is not None else "")
+    if mem["total_bytes"] > BUDGET_BYTES:
+        logger.warning("estimated GPU peak %.2f GB exceeds the %.1f GiB "
+                       "budget — chunked to %d candidates/scan",
+                       mem["total_bytes"] / 1e9, BUDGET_BYTES / 1024 ** 3,
+                       chunk)
+
     out: dict = {
         "run_slug": run_slug, "groups": groups, "timeframes": timeframes,
         "volume_policy": volume_policy, "n_folds": len(folds),
         "streams": [s.stream_id for s in kept],
-        "search": "cma-gpu", "device": device,
+        "search": "cma-gpu", "device": device, "scorer": "v5",
         "flip_rate": flip_rate, "top_k": cfg.top_k,
-        "finalist_tol": finalist_tol, "sides": {},
+        "finalist_tol": finalist_tol,
+        "gpu_memory": {**mem, "budget_bytes": BUDGET_BYTES,
+                       "bytes_per_candidate_bar": BYTES_PER_CANDIDATE_BAR,
+                       "chunk": chunk,
+                       "chunk_overridden": gpu_chunk is not None},
+        "sides": {},
     }
+    artifacts_cache: dict[str, object] = {}  # Params-free, shared by sides
     for side in sides:
         seed = (seed_from_trial_dict(seed_params[side], side)
                 if seed_params and side in seed_params else Params())
         gpu = GpuPooledScorer(folds=folds, streams=kept, side=side,
                               base_params=seed, device=device)
-        res = _PopOptimizer(seed=seed, scorer=gpu, side=side, config=cfg).run()
+        opt = _PopOptimizer(seed=seed, scorer=gpu, side=side, config=cfg)
+        opt.chunk = chunk
+        res = opt.run()
 
         # Science contract (§6): finalists re-scored by the EXACT CPU scorer;
         # parity violations are HARD-dropped, never warned away.
@@ -345,6 +398,19 @@ def run_v17_gpu(
             "acceptance": {"verdict": verdict, "pinned": pinned,
                            "bootstrap": stab, "era_pass": era_pass},
         }
+        # Spec §5 — Signal Card calibration on the winner (scorer v5 fields).
+        # The FROZEN detector is only EXECUTED on the full stream histories;
+        # signal bytes are untouched by construction.
+        cal = calibrate_for_run(stream_datas, wp, side=side,
+                                seed=cfg.rng_seed,
+                                artifacts_cache=artifacts_cache)
+        out["sides"][side].update({
+            "calibration": cal["calibration"],
+            "signal_cards": cal["signal_cards"],
+            "r_multiple_backtest": cal["r_multiple_backtest"],
+            "trace": {"scorer_version": "v5",
+                      "calibration_block_hash": cal["calibration_block_hash"]},
+        })
         if side == "high":
             diag = per_asset_high_diagnostic(folds, wp, side="high")
             diag["advisory"]["selection_percentile"] = float(

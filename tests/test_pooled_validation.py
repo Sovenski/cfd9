@@ -149,9 +149,10 @@ def test_pooled_objective_runs_and_returns_float(tmp_path):
 # ---------------------------------------------------------------------------
 
 def test_fold_is_informative_filters_zero_pivot_folds():
-    """_fold_is_informative returns False when pooled OOS pivots == 0."""
-    assert _fold_is_informative({"pooled_total_pivots_oos": 0.0}) is False
-    assert _fold_is_informative({"pooled_total_pivots_oos": 2.0}) is True
+    """_fold_is_informative returns False when pooled OOS pivot MASS == 0
+    (Scorer v5, spec §2.4 — replaces the v4 structural-pivot count check)."""
+    assert _fold_is_informative({"pooled_total_mass_oos": 0.0}) is False
+    assert _fold_is_informative({"pooled_total_mass_oos": 0.3}) is True
     assert _fold_is_informative({}) is False
 
 
@@ -165,7 +166,7 @@ def test_objective_skips_noninformative_folds():
     non-informative, which is the only precondition the inner loop depends on.
 
     The 0.0 fall-back when every fold is skipped is tested by monkey-patching
-    evaluate_pooled_fold to return (score=0.0, components={"pooled_total_pivots_oos": 0.0})
+    evaluate_pooled_fold to return (score=0.0, components={"pooled_total_mass_oos": 0.0})
     for every fold, then running the objective via a fresh Optuna trial.
     """
     import pytest
@@ -186,8 +187,8 @@ def test_objective_skips_noninformative_folds():
     dummy_fold = [object()]  # one fake PreparedSlice
     dummy_streams = [Stream("SPX", "1D", "p", "US_EQ")]
 
-    # All folds yield zero OOS pivots → all non-informative → objective must return 0.0.
-    non_informative_result = (0.0, {"pooled_total_pivots_oos": 0.0})
+    # All folds yield zero OOS pivot mass → all non-informative → objective must return 0.0.
+    non_informative_result = (0.0, {"pooled_total_mass_oos": 0.0})
     with mock.patch(
         "src.pooled_validation.evaluate_pooled_fold",
         return_value=non_informative_result,

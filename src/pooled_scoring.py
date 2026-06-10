@@ -1,10 +1,13 @@
-"""Cluster-weighted pooled scoring for multi-asset folds.
+"""Cluster-weighted pooled scoring for multi-asset folds — Scorer v5.
 
-Pools the per-stream match counts from ``precision_at_n_stats`` (at the single
-v4 tolerance scale ``REFERENCE_N``) weighted by ``1/cluster_size``, then runs
-the SAME side-score math as ``compute_side_score`` on the pooled counts. The
-weighting is what prevents correlated streams (e.g. SPX-1D + SPX-1W, or
-SPX+NDX) from over-crediting the objective.
+Pools per-stream SPAN-MASS match statistics (``match_signals_weighted``,
+spec §2.1-§2.2: ±1 direct-hit Hungarian matching against span-weighted
+pivots) weighted by ``1/cluster_size``, then runs the SAME composite side-
+score math as the per-slice scorer (``scoring_v5.compute_side_score_v5``)
+on the pooled masses. The cluster weighting is what prevents correlated
+streams (e.g. SPX-1D + SPX-1W, or SPX+NDX) from over-crediting the
+objective; the mass weighting is what prevents the optimizer from farming
+small swings (spec §1.3).
 """
 from __future__ import annotations
 
@@ -12,70 +15,57 @@ from dataclasses import dataclass
 
 import numpy as np
 
-from .scoring import (
-    GAMMA, MIN_RATE, PRECISION_EXPONENT, RECALL_TARGET, REFERENCE_N,
-)
+from .scoring import GAMMA
+from .scoring_v5 import WeightedStats, compute_side_score_v5
 
 
 @dataclass(frozen=True)
 class StreamStat:
-    """Per-stream match counts at REFERENCE_N, plus the stream's pool weight."""
+    """Per-stream match statistics plus the stream's pool weight.
+
+    Scorer v5 fields (spec §2.3): ``tp_mass`` / ``total_mass`` /
+    ``n_unmatched`` carry the span-mass quantities the pooled score is
+    computed from. The v4 count fields (``tp``, ``matched_pivots``,
+    ``total_pivots``) are retained as diagnostics (1:1 matching makes
+    ``tp == matched_pivots``; ``total_pivots`` counts grid-span events).
+    """
+
     n_signals: int
     tp: int
     matched_pivots: int
     total_pivots: int
     n_bars: int
     weight: float
+    tp_mass: float = 0.0
+    total_mass: float = 0.0
+    n_unmatched: int = 0
 
 
 def pooled_side_score(
     stats: list[StreamStat], side: str,
 ) -> tuple[float, dict[str, float]]:
-    """Weighted-pooled single-scale side score in [0, 1].
+    """Weighted-pooled v5 side score in [0, 1].
 
-    Mirrors ``compute_side_score`` for the v4 single-scale (REFERENCE_N) case:
-    ``precision**PRECISION_EXPONENT * recall_sat * frequency_factor *
-    excess_penalty``.
+    Sums span mass with cluster weights exactly as v4 summed counts, then
+    delegates to ``compute_side_score_v5`` so the pooled path and the
+    per-slice path share one composite formula (spec §2.2-§2.3).
     """
     if side not in ("high", "low"):
         raise ValueError(f"side must be 'high' or 'low', got {side!r}")
 
-    w_nsig = sum(s.weight * s.n_signals for s in stats)
-    w_tp = sum(s.weight * s.tp for s in stats)
-    w_matched = sum(s.weight * s.matched_pivots for s in stats)
-    w_total = sum(s.weight * s.total_pivots for s in stats)
-    w_bars = sum(s.weight * s.n_bars for s in stats)
+    pooled = WeightedStats(
+        tp_mass=float(sum(s.weight * s.tp_mass for s in stats)),
+        total_mass=float(sum(s.weight * s.total_mass for s in stats)),
+        n_signals=float(sum(s.weight * s.n_signals for s in stats)),
+        n_unmatched=float(sum(s.weight * s.n_unmatched for s in stats)),
+        n_bars=float(sum(s.weight * s.n_bars for s in stats)),
+    )
+    w_total_pivots = float(sum(s.weight * s.total_pivots for s in stats))
 
-    empty = {
-        "precision": 0.0, "recall": 0.0, "recall_saturated": 0.0,
-        "frequency_factor": 0.0, "excess_penalty": 0.0,
-        "pooled_n_signals": float(w_nsig), "pooled_total_pivots": float(w_total),
-    }
-    if w_nsig <= 0 or w_bars <= 0:
-        return 0.0, empty
-
-    precision = w_tp / w_nsig
-    recall = (w_matched / w_total) if w_total > 0 else 0.0
-    # Single scale → target_for_scale = RECALL_TARGET * sqrt(REFERENCE_N/REFERENCE_N).
-    recall_sat = 1.0 - np.exp(-recall / max(RECALL_TARGET, 1e-9)) if precision > 0 else 0.0
-    scale_score = (precision ** PRECISION_EXPONENT) * recall_sat
-
-    signal_rate = w_nsig / w_bars
-    frequency_factor = min(1.0, signal_rate / MIN_RATE)
-
-    n_eff = max(float(w_nsig), 1.0)
-    t_eff = max(float(w_total), 1.0)
-    excess_penalty = 2.0 * n_eff * t_eff / (n_eff * n_eff + t_eff * t_eff)
-
-    final = float(scale_score * frequency_factor * excess_penalty)
-    comp = {
-        "precision": float(precision), "recall": float(recall),
-        "recall_saturated": float(recall_sat),
-        "frequency_factor": float(frequency_factor),
-        "excess_penalty": float(excess_penalty),
-        "pooled_n_signals": float(w_nsig), "pooled_total_pivots": float(w_total),
-    }
-    return final, comp
+    score, comp = compute_side_score_v5(pooled, return_components=True)
+    comp["pooled_n_signals"] = pooled.n_signals
+    comp["pooled_total_pivots"] = w_total_pivots   # diagnostic count
+    return score, comp
 
 
 def pooled_fold_score(
@@ -86,7 +76,9 @@ def pooled_fold_score(
     """Pooled per-fold score with the smooth IS-OOS overfit penalty.
 
     ``fold = oos_score * exp(-GAMMA * max(0, is_score - oos_score))`` — same
-    contract as ``scoring._fold_score`` but on pooled, cluster-weighted counts.
+    contract as ``scoring._fold_score`` but on pooled, cluster-weighted span
+    masses. ``precision_oos`` / ``recall_oos`` carry the WEIGHTED v5
+    quantities (consumed by ``v17_acceptance.firing_excess``, spec §2.2).
     """
     is_score, is_comp = pooled_side_score(is_stats, side)
     oos_score, oos_comp = pooled_side_score(oos_stats, side)
@@ -101,6 +93,12 @@ def pooled_fold_score(
         "recall_oos": oos_comp["recall"],
         "excess_penalty_oos": oos_comp["excess_penalty"],
         "frequency_factor_oos": oos_comp["frequency_factor"],
+        "tp_mass_is": is_comp["tp_mass"],
+        "tp_mass_oos": oos_comp["tp_mass"],
+        "total_mass_is": is_comp["total_mass"],
+        "total_mass_oos": oos_comp["total_mass"],
+        "n_eff_oos": oos_comp["n_eff"],
+        "pooled_total_mass_oos": oos_comp["total_mass"],
         "pooled_total_pivots_oos": oos_comp["pooled_total_pivots"],
     }
     return fold, components

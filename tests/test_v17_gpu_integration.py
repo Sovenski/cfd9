@@ -228,6 +228,40 @@ def test_run_v17_gpu_end_to_end_two_asset_pool(tmp_path):
         + SEARCH_KW["generations"] * SEARCH_KW["popsize"]
     assert Path(out["_written"]).exists()
 
+    # --- scorer v5 emission (spec §5 + §9 trace) ----------------------------
+    from src.scoring_v5 import SPAN_GRID
+    from src.v17_card.gpu_memory import BUDGET_BYTES
+
+    assert out["scorer"] == "v5"
+    trace = side["trace"]
+    assert trace["scorer_version"] == "v5"
+    assert len(trace["calibration_block_hash"]) == 64
+    cal = side["calibration"]
+    assert cal["grid"] == SPAN_GRID and cal["degenerate"] is False
+    assert len(cal["S_R"]) == len(SPAN_GRID)
+    for lo, pt, hi in zip(cal["S_lo"], cal["S_R"], cal["S_hi"]):
+        assert lo - 1e-12 <= pt <= hi + 1e-12      # F6 band contains point
+    diag = cal["fit_diagnostics"]
+    assert diag["conditional_on_match"] is True    # R3
+    assert "in-sample" in diag["in_sample_disclaimer"]  # F7
+    cards = side["signal_cards"]
+    assert isinstance(cards, list) and len(cards) >= 1
+    assert {c["stream"] for c in cards} <= set(out["streams"])
+    bt = side["r_multiple_backtest"]
+    assert bt["costs_ignored"] is True and bt["n_signals"] == len(cards)
+
+    # --- L4 memory provenance (spec §6 / F9) -------------------------------
+    mem = out["gpu_memory"]
+    assert mem["budget_bytes"] == BUDGET_BYTES
+    assert mem["chunk"] >= 1 and mem["chunk_overridden"] is False
+    assert mem["total_bytes"] == mem["pool_bytes"] + mem["work_bytes"]
+
+    # --- the §5 run JSON must round-trip strictly (no NaN leakage) ----------
+    written = json.loads(Path(out["_written"]).read_text())
+    assert written["scorer"] == "v5"
+    json.loads(json.dumps(written["sides"]["low"]["calibration"],
+                          allow_nan=False))
+
 
 def test_run_v17_gpu_rejects_bad_args(tmp_path):
     with pytest.raises(ValueError, match="sides"):

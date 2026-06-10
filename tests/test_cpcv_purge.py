@@ -199,6 +199,10 @@ def _toy_df(n: int = 1000, pivots: tuple[int, ...] = (500,)) -> pd.DataFrame:
     lbl = np.zeros(n, dtype=np.int8)
     lbl[list(pivots)] = 1
     df[f"pivot_N{REFERENCE_N}"] = lbl
+    # Scorer v5 fixture migration: _stream_stat now matches against the
+    # span column (spec §2.1); plant the same events as N*=100 spans.
+    df["pivot_span_high"] = lbl.astype(np.int32) * REFERENCE_N
+    df["pivot_span_low"] = np.zeros(n, dtype=np.int32)
     return df
 
 
