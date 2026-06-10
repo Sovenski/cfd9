@@ -113,13 +113,19 @@ SIDES = "high,low"          #@param {type:"string"}
 #@markdown Run a GENERATIONS=5 pilot first to measure min/generation, then scale to 30+.
 POPSIZE = 128               #@param {type:"integer"}
 GENERATIONS = 5             #@param {type:"integer"}
-SOBOL_N = 512               #@param {type:"integer"}
+SOBOL_N = 128               #@param {type:"integer"}
 TOP_K = 20                  #@param {type:"integer"}
 RNG_SEED = 42               #@param {type:"integer"}
 
 import logging, json
-logging.basicConfig(level=logging.INFO, format="%(levelname)s %(name)s: %(message)s")
+# force=True: Colab's kernel pre-installs a root handler, which makes a plain
+# basicConfig a silent no-op — without this you see NO progress at all.
+logging.basicConfig(level=logging.INFO, force=True,
+                    format="%(asctime)s %(levelname)s %(name)s: %(message)s")
 from src.v17_runner import run_v17_gpu
+
+print('starting run_v17_gpu — fold/artifact build takes a few minutes before '
+      'the first generation logs appear...', flush=True)
 
 run_slug = f"v17gpu_{datetime.now().strftime('%Y%m%d_%H%M%S')}"
 out = run_v17_gpu(
