@@ -152,26 +152,65 @@ print(json.dumps({s: {k: v for k, v in d.items() if k != 'trace'}
                   for s, d in out.get('sides', {}).items()}, indent=2, default=str)[:4000])
 print('written ->', out.get('_written'))'''
 
-CELL_INSPECT = """# Cell 6 - Inspect winners (Pine-ready params)
-# Per side: seed->final LCB (raw + deflated), gate verdict, boundary pins,
-# and the thresholds the optimizer changed vs the seed ('changed' is the
-# runner's authoritative diff). best_params holds the FULL Pine-ready set.
-for side, d in out.get('sides', {}).items():
-    acc = d.get('acceptance', {})
-    print(f"=== {side.upper()} ===")
-    print(f"  LCB: seed {d.get('seed_lcb'):.5f} -> final {d.get('final_lcb'):.5f}"
-          f"  (deflated {d.get('final_lcb_deflated'):.5f})")
-    print(f"  gates: {acc.get('verdict', 'n/a')}   boundary-pinned: {acc.get('pinned') or 'none'}")
-    print(f"  finalists kept/dropped: {d.get('n_finalists')}/{d.get('n_dropped_finalists')}"
-          f"   evals: {d.get('n_evals')}")
-    changed = d.get('changed', [])
+CELL_INSPECT = '''# Cell 6 - FULL ENGINE REPORT (copy-paste friendly)
+import json as _json
+
+def _f(x, n=5):
+    return f"{x:.{n}f}" if isinstance(x, (int, float)) and x is not None else str(x)
+
+L = []
+A = L.append
+A("=" * 78)
+A(f"SPECULATORES v17-GPU RUN REPORT — {out.get('run_slug')}")
+A("=" * 78)
+A(f"pool:      {out.get('streams')}  ({out.get('n_folds')} folds, device={out.get('device')})")
+A(f"search:    {out.get('search')}  top_k={out.get('top_k')}  flip_rate={out.get('flip_rate')}"
+  f"  finalist_tol={out.get('finalist_tol')}")
+A(f"volume:    {out.get('volume_policy')}   groups={out.get('groups')} tf={out.get('timeframes')}")
+A(f"results:   {out.get('_written', '(not written)')}")
+for side, d in out.get("sides", {}).items():
+    acc = d.get("acceptance", {})
+    defl = d.get("deflation", {})
+    boot = acc.get("bootstrap", {})
+    A("")
+    A("-" * 78)
+    A(f"{side.upper()} SIDE")
+    A("-" * 78)
+    A(f"LCB:        seed {_f(d.get('seed_lcb'))} -> final {_f(d.get('final_lcb'))}"
+      f"   DEFLATED {_f(d.get('final_lcb_deflated'))}")
+    A(f"deflation:  haircut {_f(defl.get('haircut'))} (sigma {_f(defl.get('sigma_trials'))},"
+      f" E[maxZ_{defl.get('n_trials')}] {_f(defl.get('e_max_z'), 3)})")
+    A(f"verdict:    {acc.get('verdict', 'n/a')}   boundary-pinned: {acc.get('pinned') or 'none'}")
+    A(f"bootstrap:  mean {_f(boot.get('mean'))} std {_f(boot.get('std'))} min {_f(boot.get('min'))}"
+      f"  pass={boot.get('pass')}   era_pass={acc.get('era_pass')}")
+    A(f"evals:      {d.get('n_evals')}   finalists kept/dropped: "
+      f"{d.get('n_finalists')}/{d.get('n_dropped_finalists')}")
+    A("")
+    A("changed thresholds vs seed:")
+    changed = d.get("changed", [])
     if not changed:
-        print('  changed thresholds: none (seed already optimal on this pool)')
-    for f, v in changed:
-        print(f"  {f:38s} -> {v!r}")
-    if side == 'high' and 'per_asset_diagnostic' in d:
-        print('  HIGH per-asset diagnostic (advisory):',
-              d['per_asset_diagnostic'].get('advisory'))"""
+        A("  (none — landscape flat or seed optimal)")
+    for fld, v in changed:
+        A(f"  {fld:40s} -> {v!r}")
+    A("")
+    A("finalist leaderboard (CPU-exact LCB; abs_diff = |gpu-cpu| parity):")
+    coords = d.get("coords", [])
+    for k, e in enumerate(d.get("leaderboard", [])[:10]):
+        vals = " ".join(f"{c.split('_')[0][:6]}={e.get(c):.4g}" for c in coords if c in e)
+        A(f"  #{k+1:<2d} cpu_lcb={_f(e.get('cpu_lcb'))} gpu={_f(e.get('gpu_lcb'))}"
+          f" d={e.get('abs_diff'):.1e} [{e.get('stage')}]  {vals}")
+    if side == "high" and "per_asset_diagnostic" in d:
+        A("")
+        A(f"HIGH per-asset diagnostic (advisory): "
+          f"{_json.dumps(d['per_asset_diagnostic'], default=str)[:400]}")
+    A("")
+    A(f"FULL best_params ({side}) — Pine-ready:")
+    A(_json.dumps(d.get("best_params", {}), indent=2, default=str))
+if out.get("tv_audit") is not None:
+    A("")
+    A(f"tv_audit hook: {_json.dumps(out['tv_audit'], default=str)[:400]}")
+report = "\\n".join(L)
+print(report)'''
 
 
 def _code(src: str) -> dict:
