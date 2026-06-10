@@ -106,16 +106,16 @@ CELL_RUN = '''#@title Cell 5 (optional) - Full GPU optimizer run  { display-mode
 #@markdown detector; acceptance gates + TV parity audit. Results JSON -> Drive.
 from datetime import datetime
 
-GROUPS = "indices"          #@param {type:"string"}
+GROUPS = "INDICES,COMMODITIES,FX,WORLD_ETF"  #@param {type:"string"}
 TIMEFRAMES = "1D"           #@param {type:"string"}
 SIDES = "high,low"          #@param {type:"string"}
 #@markdown **Sizing (measured on L4):** ~14s/generation at POPSIZE 128 — the GPU is
 #@markdown not the bottleneck; the CPU finalist re-score tail is. L4 is sufficient.
 POPSIZE = 128               #@param {type:"integer"}
-GENERATIONS = 10            #@param {type:"integer"}
-SOBOL_N = 128               #@param {type:"integer"}
+GENERATIONS = 30            #@param {type:"integer"}
+SOBOL_N = 256               #@param {type:"integer"}
 TOP_K = 16                  #@param {type:"integer"}
-RNG_SEED = 42               #@param {type:"integer"}
+RNG_SEED = 69               #@param {type:"integer"}
 #@markdown **Anti-spray (search only):** penalizes candidates that fire far more
 #@markdown signal mass than they hit (weighted recall/precision > cap). Reported
 #@markdown LCBs stay RAW — this only steers the search away from overfiring.
