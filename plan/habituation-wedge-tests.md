@@ -43,3 +43,47 @@ attribution identical to `temp/miss_autopsy.py`.
 recovered-set precision is measured on ALL eligible bars (not conditioned on
 fires); the nothing-bars control is matched on weak agreement so P2 cannot
 pass by "weak bars differ from strong bars" alone.
+
+---
+
+## RESULTS (2026-06-11, temp/habituation_wedge.py, anchor=1)
+
+| Test | HIGH | LOW |
+|---|---|---|
+| **P2 thesis** | **PASS** — wedge at blocked misses **+0.367** vs nothing-bars +0.008 (p=0.000) | **PASS** — **+0.399** vs +0.000 (p=0.000) |
+| **P1 economics** | **FAIL** — recovered set = **17.6% of ALL bars**, precision 0.106 vs 0.240 required (p=1.0); recovery 98% | **FAIL** — 3.45% of bars, precision **0.016** vs 0.286 (p=1.0); recovery 99% |
+| P3 payoff | recovered fwd20 −0.0018 vs all-bars −0.0029 (still negative for shorts) | +0.0033 vs +0.0029 (≈ random) |
+| P4b | — | 99.8% of price-gate-blocked misses anchored-extreme (same saturation) |
+
+**Verdict (per pre-registered build rule P2∧P1): NO v18 BUILD.**
+
+**Interpretation:** the thesis's cause-separation claim is TRUE — "weak because
+the ruler stretched" is cleanly distinguishable from "weak because nothing is
+happening" (a genuine mechanistic finding). But the anchored ruler is extreme
+on essentially the WHOLE of every trend: the recovered set is ~39× larger than
+its targets, and shrinking it to acceptable precision requires exactly the
+turn-vs-continuation discriminator that every prior test failed to find.
+**Habituation explains WHY the model is silent at slow extremes; un-silencing
+it is the original unsolved discrimination problem in a new coat.** P5
+(anchor=2) skipped as moot: P1's failure mode (whole-trend admission) is
+structural, not anchor-parameter-sensitive.
+
+---
+
+## Addendum: dip-buyer null baseline (pre-registered before running)
+
+**Question:** does the LOW detector beat a one-line naive dip rule, or is it
+repackaged "buy the dip + drift"?
+
+**Naive rule:** fire when `low <= rolling N-bar min of low`, N calibrated PER
+STREAM so the naive fire count matches the LOW preset's fire count (±10%),
+same cooldown (7 bars) applied.
+
+**Pre-registered rules:**
+- **D1 (location):** precision(LOW fires) − precision(naive fires) ≥ **3pts**
+  pooled, cluster bootstrap p < 0.05 → the detector's location skill adds
+  value over the dummy.
+- **D2 (payoff, report-only):** median fwd20/fwd40 long returns, LOW vs naive
+  vs all-bars.
+- If D1 fails → LOW's documented edge is naive-dip-replicable; Route D
+  productization should use the simpler rule (or be re-examined).

@@ -38,6 +38,16 @@ Three layers, one contract:
 
 **Reference-frame thesis: tested and not supported (2026-06-11, three pre-registered tests, plan/v18-frame-aware-tests-and-spec.md).** Frame events (window-expiry rotations) are mechanically real but carry no precision signal at fire bars (dose-response flat, p≈0.64); cross-scale freshness is degenerate at fires (sync==0 at ~100% — fires are stale-extremeness events, onset info lives upstream of the fire bar); event-time PIR beats bar-time only on HIGH and below the registered bar (Δ+0.034). **No v18 detector change.** **[SOLID]** (negative)
 
+**Habituation: mechanism confirmed, unexploitable (2026-06-11, pre-registered
+wedge tests, plan/habituation-wedge-tests.md).** "Weak agreement because the
+ruler stretched" is cleanly separable from "weak because nothing happening"
+(wedge +0.37/+0.40 vs ~0.00, p=0.000 both sides) and explains ~half of HIGH's
+missed tops — but every recovery trigger admits whole trends (recovered set
+17.6% of all bars at 0.106 precision vs 0.240 required). Un-silencing the
+model at slow extremes requires the same turn-vs-continuation discriminator
+that does not exist in current information. **[SOLID]** (mechanism positive,
+economics negative) **No v18 build.**
+
 **Open / hypothesis-grade:**
 - The true precision frontier of the *real Pine-expressible space* is unmeasured. Surrogate ceilings (v1: no HIGH pocket; v2 with added families: pockets both sides) proved only that ceiling estimates are hostage to feature-list choices. **[HYP]**
 - Duration/long-memory ("bars since extreme", from-ATH) and continuous short-slope looked like the strongest *new* discriminator candidates in surrogate space. **[HYP]** — not in the Pine script today; adopting them is a design decision, not a finding.
