@@ -45,13 +45,15 @@ _NB = _REPO / "h100_v17_gpu.ipynb"
 #: Cell 5 RE-PINNED AGAIN 2026-06-11: feature-ablation adds the RUN_ABLATION
 #: checkbox + build_ablation_variants wiring (leave-one-out, all votes on);
 #: asserted in tests/test_shape_variants.py::test_cell5_run_ablation_*.
+#: Cell 5 RE-PINNED AGAIN 2026-06-11: v18 production run defaults — gen30
+#: seed211, ablation/pruned off (plan/v18-repair-spec.md Stage C, C2).
 _PRE_CHANGE_CELL_SHA256 = [
     "694cc61d0520b2b596488663a133a241b2acfcdaeb42eac1c22ecb1707796409",  # 0 md intro
     "021625f0c9aec826339563fccf713c8bdcdc33c049a82272f60a3633a753b2e6",  # 1 mount
     "d4de24c91407fa5f670fa35206227e933be1e782158e630cc7aae3d14389b0b6",  # 2 clone
     "79f036c65d62bbb6feb18f85f06d9dc4f47fccf954a329b74df22664b98ff17b",  # 3 settings
     "4ec943aa666a08fb9070aec11f2fdaaea233f70b9bff5608b8d8dfc8c7eadb83",  # 4 validate
-    "94005c314297b2bd75f1b9acfbe33c41cfbc3798cd971ece714b2b32ca8f91ab",  # 5 run (ablation screen: gen15, seed137)
+    "c300ce1f531e414477aab92ef34e1b6a99bcc7a82989baac3744c013d28e3911",  # 5 run (v18 production: gen30, seed211, ablation/pruned off)
 ]
 
 

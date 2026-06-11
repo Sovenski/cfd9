@@ -112,10 +112,10 @@ SIDES = "high,low"          #@param {type:"string"}
 #@markdown **Sizing (measured on L4):** ~14s/generation at POPSIZE 128 — the GPU is
 #@markdown not the bottleneck; the CPU finalist re-score tail is. L4 is sufficient.
 POPSIZE = 128               #@param {type:"integer"}
-GENERATIONS = 15            #@param {type:"integer"}
+GENERATIONS = 30            #@param {type:"integer"}
 SOBOL_N = 256               #@param {type:"integer"}
 TOP_K = 16                  #@param {type:"integer"}
-RNG_SEED = 137              #@param {type:"integer"}
+RNG_SEED = 211              #@param {type:"integer"}
 #@markdown **Anti-spray (search only):** penalizes candidates that fire far more
 #@markdown signal mass than they hit (weighted recall/precision > cap). Reported
 #@markdown LCBs stay RAW — this only steers the search away from overfiring.
@@ -127,7 +127,7 @@ FIRING_CAP = 1.0            #@param {type:"number"}  # v5.1: tolerated recall/pr
 #@markdown head-to-head (baseline vs mom-vel off BOTH sides; the winner is
 #@markdown picked era_pass-first-then-deflated-LCB). Deeper prunes stay manual
 #@markdown shape_variants overrides.
-RUN_PRUNED = True           #@param {type:"boolean"}
+RUN_PRUNED = False          #@param {type:"boolean"}
 #@markdown **Feature ablation (leave-one-out importance):** turns ON every vote
 #@markdown feature both sides, then searches all-on plus one 'minus-one-feature'
 #@markdown variant per feature (8 variants/side). Cell 6 prints the HOLDOUT-score
@@ -135,7 +135,7 @@ RUN_PRUNED = True           #@param {type:"boolean"}
 #@markdown model generalizes BETTER without it). EXPENSIVE — 8x the search; for a
 #@markdown screening sweep, lower GENERATIONS (~12-15). Takes precedence over
 #@markdown RUN_PRUNED. Set False for production runs.
-RUN_ABLATION = True         #@param {type:"boolean"}
+RUN_ABLATION = False        #@param {type:"boolean"}
 #@markdown **Fold geometry.** The centered 200-bar label window kills the first/last
 #@markdown 200 bars of every slice, so SMALL OOS slices have almost no scorable bars
 #@markdown (the default 0.03 leaves ~28 live bars -> all LCBs 0.0). Large slices:

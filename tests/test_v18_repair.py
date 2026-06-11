@@ -298,6 +298,26 @@ def test_momentum_thresh_is_a_searchable_threshold_field():
         assert f"momentum_diverge_thresh_{side}" in on
 
 
+def test_runner_emits_detector_v18():
+    """C2 (P2.7): run_v17_gpu stamps ``detector: v18`` next to ``scorer``.
+
+    A real e2e run is too costly here and the out dict is a literal built
+    inside ``run_v17_gpu``, so this is a deliberate source-level assertion
+    on that function (inspect.getsource, not a repo grep): the stamp must
+    live in the SAME dict literal as the ``scorer`` era marker.
+    """
+    import inspect
+    import re
+    from src.v17_runner import run_v17_gpu
+    src = inspect.getsource(run_v17_gpu)
+    assert '"detector": "v18"' in src
+    # both era markers in one literal: "scorer" first, "detector" after,
+    # with no dict-closing `}` followed by a new `out` assignment between.
+    m = re.search(r'"scorer": SCORER_VERSION,(.*?)"detector": "v18"',
+                  src, re.DOTALL)
+    assert m is not None, "detector stamp must sit in the out dict next to scorer"
+
+
 def test_fastdetector_varies_momentum_thresh_without_rebuild(dax_slice, dax_art):
     from src.detector import SpeculatorDetector
     from src.v17_fastdetector import FastDetector

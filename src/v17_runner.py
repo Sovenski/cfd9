@@ -432,6 +432,10 @@ def run_v17_gpu(
         "volume_policy": volume_policy, "n_folds": len(folds),
         "streams": [s.stream_id for s in kept],
         "search": "cma-gpu", "device": device, "scorer": SCORER_VERSION,
+        # v18 era marker (plan/v18-repair-spec.md P2.7): the detector whose
+        # semantics produced these signals — gjr unclip, momentum threshold,
+        # requirable drift, Pine-exact warm-up.
+        "detector": "v18",
         "flip_rate": flip_rate, "top_k": cfg.top_k,
         "finalist_tol": finalist_tol,
         "firing_penalty": firing_penalty, "firing_cap": firing_cap,

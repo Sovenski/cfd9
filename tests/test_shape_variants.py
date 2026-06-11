@@ -334,7 +334,9 @@ def notebook():
 def test_cell5_run_pruned_checkbox_passes_variant_configs(notebook):
     src = _src(notebook.cells[5])
     norm = " ".join(src.split())
-    assert 'RUN_PRUNED = True #@param {type:"boolean"}' in norm
+    # v18 production defaults (v18-repair-spec Stage C): RUN_PRUNED ships
+    # False — the checkbox/wiring must still EXIST; only the default changed.
+    assert 'RUN_PRUNED = False #@param {type:"boolean"}' in norm
     assert '"baseline": {}' in norm
     assert '"use_momentum_velocity_high": False' in norm
     assert '"use_momentum_velocity_low": False' in norm
@@ -347,7 +349,9 @@ def test_cell5_run_pruned_checkbox_passes_variant_configs(notebook):
 def test_cell5_run_ablation_passes_leave_one_out_variants(notebook):
     src = _src(notebook.cells[5])
     norm = " ".join(src.split())
-    assert 'RUN_ABLATION = True #@param {type:"boolean"}' in norm
+    # v18 production defaults (v18-repair-spec Stage C): RUN_ABLATION ships
+    # False — the checkbox/wiring must still EXIST; only the default changed.
+    assert 'RUN_ABLATION = False #@param {type:"boolean"}' in norm
     assert "build_ablation_variants" in norm
     # ablation takes precedence over the pruned/baseline dict
     assert "if RUN_ABLATION else" in norm
