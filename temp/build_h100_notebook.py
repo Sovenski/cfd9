@@ -136,6 +136,13 @@ RUN_PRUNED = False          #@param {type:"boolean"}
 #@markdown screening sweep, lower GENERATIONS (~12-15). Takes precedence over
 #@markdown RUN_PRUNED. Set False for production runs.
 RUN_ABLATION = False        #@param {type:"boolean"}
+#@markdown **v18 repaired-features head-to-head (USE THIS):** baseline vs the
+#@markdown REPAIRED architecture — unclipped gjr ON (live box [0.5,3]),
+#@markdown drift REQUIRABLE (count_drift_vote on), mom-vel OFF on LOW (what
+#@markdown its pins keep voting for). The 2026-06-11 seed-211 run never
+#@markdown engaged the v18 repairs (use-flags frozen at seed values) — this
+#@markdown checkbox is the actual v18 test. Takes precedence over the above.
+RUN_V18_VARIANTS = True     #@param {type:"boolean"}
 #@markdown **Fold geometry.** The centered 200-bar label window kills the first/last
 #@markdown 200 bars of every slice, so SMALL OOS slices have almost no scorable bars
 #@markdown (the default 0.03 leaves ~28 live bars -> all LCBs 0.0). Large slices:
@@ -155,9 +162,16 @@ from src.v17_ablation import build_ablation_variants
 print('starting run_v17_gpu — fold/artifact build takes a few minutes before '
       'the first generation logs appear...', flush=True)
 
-# RUN_ABLATION (leave-one-out, all votes on) takes precedence over RUN_PRUNED.
+# Precedence: RUN_V18_VARIANTS > RUN_ABLATION > RUN_PRUNED.
 shape_variants = (
-    build_ablation_variants() if RUN_ABLATION
+    {
+        "baseline": {},
+        "repaired": {"use_gjr_asym_high": True, "use_gjr_asym_low": True,
+                     "use_momentum_velocity_low": False,
+                     "count_drift_vote_high": True,
+                     "count_drift_vote_low": True},
+    } if RUN_V18_VARIANTS
+    else build_ablation_variants() if RUN_ABLATION
     else ({
         "baseline": {},
         "pruned":   {"use_momentum_velocity_high": False,
