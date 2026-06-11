@@ -102,3 +102,11 @@ same cooldown (7 bars) applied.
 - **Consequence (per pre-registration):** LOW's edge claim is downgraded —
   largely naive-dip + drift. Route D, if pursued, must either use the simpler
   rule or justify the detector by the payoff delta under a registered test.
+
+### D3 — registered dip-SELECTION payoff test (confirmatory-on-same-data; hypothesis from D2)
+
+Does the detector's dip selection beat the naive rule's dips on forward return?
+- **D3a** pooled: cluster-bootstrap (2000, by stream) p < 0.05 on mean(det fwd) − mean(naive fwd) at BOTH 20 and 40 bars
+- **D3b** consistency: per-stream median fwd20 OR fwd40 favors detector in ≥ 10/16 streams
+- **D3c** effect floor: median delta ≥ +0.0010 (10bps) at fwd20
+- PASS requires all three. Caveat recorded: same data that generated the hypothesis.
