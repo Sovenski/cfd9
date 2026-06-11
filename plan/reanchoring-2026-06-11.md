@@ -36,6 +36,8 @@ Three layers, one contract:
 
 **The validation machinery works.** Pins correctly flagged box-edge sitters; deflation killed spray regimes; v5.1 re-pricing + widened bounds moved the winners materially; cross-seed replication confirmed real basins. **[SOLID]** (process claim)
 
+**Reference-frame thesis: tested and not supported (2026-06-11, three pre-registered tests, plan/v18-frame-aware-tests-and-spec.md).** Frame events (window-expiry rotations) are mechanically real but carry no precision signal at fire bars (dose-response flat, p≈0.64); cross-scale freshness is degenerate at fires (sync==0 at ~100% — fires are stale-extremeness events, onset info lives upstream of the fire bar); event-time PIR beats bar-time only on HIGH and below the registered bar (Δ+0.034). **No v18 detector change.** **[SOLID]** (negative)
+
 **Open / hypothesis-grade:**
 - The true precision frontier of the *real Pine-expressible space* is unmeasured. Surrogate ceilings (v1: no HIGH pocket; v2 with added families: pockets both sides) proved only that ceiling estimates are hostage to feature-list choices. **[HYP]**
 - Duration/long-memory ("bars since extreme", from-ATH) and continuous short-slope looked like the strongest *new* discriminator candidates in surrogate space. **[HYP]** — not in the Pine script today; adopting them is a design decision, not a finding.
