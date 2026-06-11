@@ -97,7 +97,7 @@ unclipped gjr / thresholded momentum carry discrimination is UNKNOWN. The
 freeze/kill decision is deferred until one run on a repaired space.** **[SOLID]**
 
 **v18 era (2026-06-11):** detector.py, indicators.py, v17_fastdetector.py,
-v17_gpu/** re-frozen at commit `<v18-freeze-commit>`;
+v17_gpu/** re-frozen at commit `aa5caa9`;
 pine/speculatores_v18_signalcard.pine is the v18 Pine canon; parity anchors:
 e830d (v18-lean), e7bb6 (v17.5), golden re-pin bar-221 documented in
 plan/v18-repair-spec.md ERRATUM.
