@@ -110,3 +110,15 @@ Does the detector's dip selection beat the naive rule's dips on forward return?
 - **D3b** consistency: per-stream median fwd20 OR fwd40 favors detector in ≥ 10/16 streams
 - **D3c** effect floor: median delta ≥ +0.0010 (10bps) at fwd20
 - PASS requires all three. Caveat recorded: same data that generated the hypothesis.
+
+### D3 RESULTS (2026-06-11, temp/dip_selection_d3.py)
+
+- D3a pooled significance: **FAIL** (p=0.157 fwd20 / 0.166 fwd40)
+- D3b consistency: PASS (12/16 streams favor detector)
+- D3c effect floor: PASS (median fwd20 delta +13bps)
+- **Overall: FAIL** (all three required). The dip-selection payoff tilt is
+  directionally consistent but statistically inseparable from zero under
+  stream-cluster bootstrap. LOW's final evidence state: location =
+  naive-replicable (D1), payoff tilt = unproven (D3). LOW = disciplined
+  buy-the-dip; no demonstrated proprietary alpha beyond the risk/calibration
+  layer.
