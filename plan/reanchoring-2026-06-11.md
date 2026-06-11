@@ -79,3 +79,19 @@ Three honest routes (+1 default):
 - Precision is the scoreboard. Every proposed change must answer: *which side, how many precision points, at what firing rate, at what horizon?*
 - One ruler: scorer v5.1. Era-marked. Cross-era comparisons by label only.
 - The parity contract is the project. Anything that can't ship to a TradingView chart is out of scope by definition.
+
+**Vote-layer audit: the user's "painted knobs" hypothesis CONFIRMED (2026-06-11,
+temp/vote_contribution.py + temp/vote_bounds_audit.py, parity-anchored).**
+Of 7 searched vote dimensions: trend = STRUCTURAL STAMP (comparison value spans
+−12..+9 per-mille, box [0.01,0.5] is a sliver near zero — reachable pass-rate
+only 36–46%, selectivity impossible at ANY allowed threshold); gjr = STRUCTURAL
+STAMP (calc_gjr_asym's /0.1 normalization clips ~50% of mass to the ±1 rails —
+bimodal, box slices between rails); volume box 50–100% dead space (ratio q99
+1.78 vs box [1,3]); momentum has NO searchable threshold (fixed sign test, 64%
+of bars exactly 0 from FX volume absence). Only mom_vel, vola, drift, har were
+ever genuinely tunable — and the contribution census found drift+vola to be the
+only real selectors among those. The optimizer demonstrably rides the max-pass
+corners of stampable boxes to satisfy confirm_count. **Consequence: all prior
+searches were valid tests of 4 features, not 8; whether properly-scaled trend /
+unclipped gjr / thresholded momentum carry discrimination is UNKNOWN. The
+freeze/kill decision is deferred until one run on a repaired space.** **[SOLID]**
