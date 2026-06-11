@@ -1,0 +1,45 @@
+# Habituation-Wedge Tests — pre-registration (locked before results)
+
+**Thesis (2026-06-11):** weak agreement has two causes — (a) nothing is
+happening, (b) the ruler stretched during the trend it measures. They are
+distinguishable, and the (b)-bars near real turns are recoverable at
+acceptable FP cost. Motivated by the miss autopsy: HIGH misses are ~50%
+weak/brief-extremeness-blocked; LOW misses are price-gate-dominated (61%).
+
+## The instrument: anchored re-normalization (the "wedge")
+
+For each scale s in the side's preset slice, `ratio_s = close / SMA_s` (the
+exact existing feature). Two normalizations of the SAME ratio:
+
+- **bar-PIR** (status quo): position of ratio_s in its rolling `max(s,20)`-bar
+  min/max — the habituating ruler.
+- **anchored-PIR**: position of ratio_s in its min/max over `[anchor, t]`,
+  where **anchor = bar index of the last CONFIRMED opposite structural pivot**
+  (HIGH: last confirmed pivot-low; LOW: last confirmed pivot-high;
+  `pivot_low_pine/high_pine(n=20)`, confirmed 20 bars later — fully causal).
+  NaN if the anchor window is < 5 bars old.
+
+**wedge[t] = mean_s(anchored_PIR) − mean_s(bar_PIR)** (HIGH; LOW mirrored on
+the 1−PIR side). Positive wedge = the bar ruler under-reads vs the swing ruler
+= habituation. `agr_anch[t]` = fraction of slice scales whose anchored-PIR is
+extreme at the side's own `pct_extreme`.
+
+## Pre-registered tests and rules (decided before running)
+
+| # | Question | PASS rule |
+|---|---|---|
+| **P2 (thesis core)** | Is the wedge LARGE at agreement/dur-blocked missed turns and SMALL at weak-agreement nothing-bars (no turn within ±5)? | median wedge difference ≥ **0.10**, cluster bootstrap (2000, by stream) p < 0.05, per side |
+| **P1 (economics)** | Recovered-only bars `R = {agr_anch ≥ min_agreement AND agr_bar < min_agreement}`: is precision(R) ≥ current fire precision (HIGH 0.240 / LOW 0.286)? And does R recover ≥ **30%** of the agreement/dur-blocked misses? | both conditions, bootstrap p < 0.05 on the precision comparison |
+| **P3 (payoff, report-only)** | Median forward trade-direction return of R at 20/40-bar horizons vs random bars | no gate — informational |
+| **P4b (LOW-specific)** | Among LOW's price-gate-blocked misses (61%), what fraction is `agr_anch`-extreme, and what is the FP price of an anchored OR-trigger there? | same form as P1, LOW numbers |
+| **P5 (robustness)** | Re-run P1/P2 with anchor = 2nd-last opposite pivot, and report P1 at pct_extreme ±0.05 | direction must hold (no numeric gate) |
+
+**Build rule:** a v18 branch for a side requires **P2 AND P1 both PASS** on
+that side. P3/P5 inform design, never gate. Everything runs pooled on the 16
+streams, real `SpeculatorDetector` (debug columns), ground truth and blocking
+attribution identical to `temp/miss_autopsy.py`.
+
+**Anti-fooling notes:** anchors use confirmed pivots only (20-bar lag, causal);
+recovered-set precision is measured on ALL eligible bars (not conditioned on
+fires); the nothing-bars control is matched on weak agreement so P2 cannot
+pass by "weak bars differ from strong bars" alone.
