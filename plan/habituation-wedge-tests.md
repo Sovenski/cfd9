@@ -122,3 +122,21 @@ Does the detector's dip selection beat the naive rule's dips on forward return?
   naive-replicable (D1), payoff tilt = unproven (D3). LOW = disciplined
   buy-the-dip; no demonstrated proprietary alpha beyond the risk/calibration
   layer.
+
+### Ablation run (131405) + new-LOW null tests (2026-06-11)
+
+**Ablation noise map (15-gen LOO, holdout deltas):** LOW — gjr_asym −0.003
+(noise/harmful), har_vol +0.007 (noise band), volume +0.023 top (SUSPECT:
+volume vote is structurally dead on 9/16 price_only/FX streams — audit flag),
+rest +0.013..0.016. HIGH — all deltas positive (+0.011..+0.042) BUT the all_on
+winner pinned 8 thresholds at maximally-PERMISSIVE floors (votes neutralized)
+and raw LCB fell 0.093→0.034 vs the lean 090553 winner: forcing votes on hurt;
+the positive deltas are largely vote-count arithmetic, not information.
+
+**New LOW (minus_momentum, deflated 0.0678 — best ever, holdout 0.95):**
+- D1 location: FAIL again — 0.290 vs naive 0.282 (+0.8pts, p=0.129). THIRD
+  preset producing the same +0.8pts: location is naive-replicable, robustly.
+- D3 payoff full-period: +29/+33bps, p=0.002, 14/16 — but TRUE holdout-tail
+  only (post-2015, n=468): +19bps p=0.128 / +15bps p=0.349, 11/16. The
+  full-period significance is fit-period inflated. Dip-selection edge remains
+  directionally positive, OOS-unproven.
