@@ -16,7 +16,7 @@ import pandas as pd
 from .cpcv import CPCVConfig, build_cpcv_splits, reconstruct_paths
 from .detector import SpeculatorDetector, build_detector_artifacts
 from .indicators import Params
-from .pooled_scoring import StreamStat, pooled_fold_score
+from .pooled_scoring import StreamStat, pooled_fold_score, pooled_side_score
 from .scoring import (
     REFERENCE_N, STRUCTURAL_NEST, add_pivot_labels, precision_at_n_stats,
 )
@@ -33,6 +33,13 @@ HOLDOUT_FRACTION: float = 0.20
 IS_FRACTION: float = 0.10
 OOS_FRACTION: float = 0.03
 STEP_FRACTION: float = 0.05
+
+#: Spec §A3 (pre-committed): the holdout score must reach at least this
+#: fraction of the winner's MEAN raw informative fold score to pass.
+#: 0.5 is a generalization floor — the holdout may be one regime; demanding
+#: parity with the search mean would be stricter than the fold-to-fold
+#: variance justifies.
+ERA_PASS_MIN_RATIO: float = 0.5
 
 
 def load_stream_frame(path: str) -> pd.DataFrame:
@@ -89,6 +96,22 @@ class PreparedSlice:
 Fold = list[PreparedSlice]
 
 
+def _prep_slice_frame(df: pd.DataFrame) -> tuple[pd.DataFrame, object] | None:
+    """Shared per-stream slice prep (fold AND holdout path, spec §A1).
+
+    MIN_STREAM_BARS gate -> ``reset_index`` -> per-slice ``add_pivot_labels``
+    (standalone warm-up inside the slice — the existing leak guard) ->
+    ``build_detector_artifacts``. Factored verbatim out of the fold loop so
+    ``build_holdout_slices`` cannot drift from it; returns ``None`` when the
+    nest cannot fit.
+    """
+    if len(df) < MIN_STREAM_BARS:
+        return None
+    df_r = df.reset_index(drop=True)
+    add_pivot_labels(df_r)
+    return df_r, build_detector_artifacts(df_r)
+
+
 def _run_fold_loop(
     stream_datas: list[StreamData],
     ref_idx: pd.DatetimeIndex,
@@ -121,14 +144,16 @@ def _run_fold_loop(
             df_oos = sd.df.loc[(sd.df.index >= oos_s) & (sd.df.index < oos_e)]
             if len(df_is) < MIN_STREAM_BARS or len(df_oos) < MIN_STREAM_BARS:
                 continue  # nest cannot fit / too few bars → drop from this fold
-            df_is_r = df_is.reset_index(drop=True)
-            df_oos_r = df_oos.reset_index(drop=True)
-            add_pivot_labels(df_is_r)
-            add_pivot_labels(df_oos_r)
+            prep_is = _prep_slice_frame(df_is)
+            prep_oos = _prep_slice_frame(df_oos)
+            if prep_is is None or prep_oos is None:  # pragma: no cover - gated above
+                continue
+            df_is_r, artifacts_is = prep_is
+            df_oos_r, artifacts_oos = prep_oos
             fold.append(PreparedSlice(
                 stream=sd.stream, df_is=df_is_r, df_oos=df_oos_r,
-                artifacts_is=build_detector_artifacts(df_is_r),
-                artifacts_oos=build_detector_artifacts(df_oos_r),
+                artifacts_is=artifacts_is,
+                artifacts_oos=artifacts_oos,
             ))
         if fold:
             folds.append(fold)
@@ -234,6 +259,74 @@ def build_cpcv_folds(
     return _run_cpcv_loop(stream_datas, ref.df.index, config, holdout_fraction)
 
 
+@dataclasses.dataclass(frozen=True)
+class EraRef:
+    """Resolved common-era reference index (shared by folds + holdout)."""
+
+    ref_idx: pd.DatetimeIndex
+    era_start: pd.Timestamp
+    eff_min_label: str
+    ref_stream_id: str
+    starts_all: tuple
+
+
+def _resolve_era_ref_index(
+    stream_datas: list[StreamData],
+    start: str | None = None,
+    min_streams: int | None = None,
+    coverage: float = 0.5,
+) -> EraRef | None:
+    """Steps 1+2 of ``build_calendar_folds``, factored out (no behavior change).
+
+    Determines ``era_start``/``era_end`` and the era-restricted reference
+    index. Reused by ``build_holdout_slices`` (spec §A1) so the holdout
+    boundary sits on the SAME reference index the folds were built on.
+    """
+    starts_all = sorted(
+        sd.df.index[0] for sd in stream_datas if len(sd.df) > 0
+    )
+    if not starts_all:
+        return None
+
+    era_end: pd.Timestamp | None  # None means no upper clip
+    if start is not None:
+        era_start = pd.Timestamp(start)
+        era_end = None
+        eff_min_label = "override"
+    else:
+        eff_min = min_streams if min_streams is not None else max(
+            2, round(coverage * len(stream_datas))
+        )
+        eff_min = min(eff_min, len(stream_datas))
+        eff_min_label = str(eff_min)
+        # era_start = the date the eff_min-th stream begins (0-indexed: [eff_min-1])
+        era_start = starts_all[eff_min - 1]
+        # era_end = last date when at least eff_min streams are still alive.
+        # Sort all stream ends descending; the (eff_min-1)-th entry is the latest
+        # date at which at least eff_min streams have not yet ended.
+        ends_all = sorted(
+            (sd.df.index[-1] for sd in stream_datas if len(sd.df) > 0),
+            reverse=True,
+        )
+        era_end = ends_all[eff_min - 1] if len(ends_all) >= eff_min else None
+
+    def _era_bar_count(sd: StreamData) -> int:
+        mask = sd.df.index >= era_start
+        if era_end is not None:
+            mask = mask & (sd.df.index <= era_end)
+        return int(mask.sum())
+
+    ref = max(stream_datas, key=_era_bar_count)
+    mask_ref = ref.df.index >= era_start
+    if era_end is not None:
+        mask_ref = mask_ref & (ref.df.index <= era_end)
+    return EraRef(
+        ref_idx=ref.df.index[mask_ref], era_start=era_start,
+        eff_min_label=eff_min_label, ref_stream_id=ref.stream.stream_id,
+        starts_all=tuple(starts_all),
+    )
+
+
 def build_calendar_folds(
     stream_datas: list[StreamData],
     is_fraction: float = IS_FRACTION,
@@ -281,52 +374,16 @@ def build_calendar_folds(
         return []
 
     # ------------------------------------------------------------------
-    # Step 1 — determine era_start
+    # Steps 1+2 — era_start + era-restricted reference index (factored into
+    # _resolve_era_ref_index, shared with build_holdout_slices — spec §A1)
     # ------------------------------------------------------------------
-    starts_all = sorted(
-        sd.df.index[0] for sd in stream_datas if len(sd.df) > 0
-    )
-    if not starts_all:
+    era = _resolve_era_ref_index(stream_datas, start, min_streams, coverage)
+    if era is None:
         return []
-
     start_explicit = start is not None
-    eff_min_label: str  # for logging
-    era_end: pd.Timestamp | None  # None means no upper clip
-    if start_explicit:
-        era_start = pd.Timestamp(start)
-        era_end = None
-        eff_min_label = "override"
-    else:
-        eff_min = min_streams if min_streams is not None else max(
-            2, round(coverage * len(stream_datas))
-        )
-        eff_min = min(eff_min, len(stream_datas))
-        eff_min_label = str(eff_min)
-        # era_start = the date the eff_min-th stream begins (0-indexed: [eff_min-1])
-        era_start = starts_all[eff_min - 1]
-        # era_end = last date when at least eff_min streams are still alive.
-        # Sort all stream ends descending; the (eff_min-1)-th entry is the latest
-        # date at which at least eff_min streams have not yet ended.
-        ends_all = sorted(
-            (sd.df.index[-1] for sd in stream_datas if len(sd.df) > 0),
-            reverse=True,
-        )
-        era_end = ends_all[eff_min - 1] if len(ends_all) >= eff_min else None
-
-    # ------------------------------------------------------------------
-    # Step 2 — choose reference as the stream with most bars in common era
-    # ------------------------------------------------------------------
-    def _era_bar_count(sd: StreamData) -> int:
-        mask = sd.df.index >= era_start
-        if era_end is not None:
-            mask = mask & (sd.df.index <= era_end)
-        return int(mask.sum())
-
-    ref = max(stream_datas, key=_era_bar_count)
-    mask_ref = ref.df.index >= era_start
-    if era_end is not None:
-        mask_ref = mask_ref & (ref.df.index <= era_end)
-    ref_idx = ref.df.index[mask_ref]
+    era_start = era.era_start
+    starts_all = era.starts_all
+    ref_idx = era.ref_idx
     n = len(ref_idx)
 
     # ------------------------------------------------------------------
@@ -358,9 +415,198 @@ def build_calendar_folds(
     logger.info(
         "build_calendar_folds: %d folds "
         "(era_start=%s, eff_min=%s, ref=%s, n_ref_bars=%d)",
-        len(folds), era_start, eff_min_label, ref.stream.stream_id, n,
+        len(folds), era_start, era.eff_min_label, era.ref_stream_id, n,
     )
     return folds
+
+
+# ---------------------------------------------------------------------------
+# Spec §A — holdout slices (selection-untouched OOS) + era_pass rule
+# ---------------------------------------------------------------------------
+
+
+@dataclasses.dataclass
+class HoldoutSlice:
+    """One stream's reserved-tail holdout slice (PreparedSlice analog).
+
+    OOS-only by construction: the slice starts after the active boundary
+    plus the embargo; ``start_ts``/``end_ts`` carry the original timestamps
+    (the frame itself is reset_index'd like every fold slice).
+    """
+
+    stream: Stream
+    df: pd.DataFrame          # reset_index'd, per-slice pivot-labelled
+    artifacts: object
+    start_ts: pd.Timestamp
+    end_ts: pd.Timestamp
+
+
+def build_holdout_slices(
+    stream_datas: list[StreamData],
+    is_fraction: float = IS_FRACTION,
+    oos_fraction: float = OOS_FRACTION,
+    step_fraction: float = STEP_FRACTION,
+    holdout_fraction: float = HOLDOUT_FRACTION,
+    start: str | None = None,
+    min_streams: int | None = None,
+    coverage: float = 0.5,
+) -> tuple[list[HoldoutSlice], dict]:
+    """Per-stream slices of the reserved holdout tail (spec §A1).
+
+    ``build_calendar_folds`` reserves the final ``holdout_fraction`` of the
+    common-era reference index; folds never touch it. The holdout starts at
+    the reference-index timestamp at ``active`` (the first reserved bar)
+    PLUS an ``EMBARGO_NEST_BARS`` (200) embargo on the reference index —
+    preventing label bleed from the last fold's OOS into the holdout
+    (centered span labels reach ±200). Slice prep is the EXACT fold path
+    (``_prep_slice_frame``): MIN_STREAM_BARS gate, ``reset_index``,
+    per-slice ``add_pivot_labels`` (standalone warm-up — consistency rule),
+    fresh detector artifacts.
+
+    ``is_fraction``/``oos_fraction``/``step_fraction`` are accepted so the
+    run's ``era_kw`` can be passed through verbatim, but they do not affect
+    the boundary — only ``holdout_fraction`` and the era arguments do.
+
+    Returns:
+        ``(slices, meta)`` where meta carries the boundary provenance:
+        ``holdout_start`` (first reserved reference bar), ``embargo_ts``
+        (first scoreable holdout bar), ``embargo_bars``, ``n_ref_bars``,
+        ``n_slices`` and ``dropped_streams``.
+    """
+    del is_fraction, oos_fraction, step_fraction  # boundary-irrelevant (doc)
+    meta: dict = {
+        "holdout_start": None, "embargo_ts": None,
+        "embargo_bars": EMBARGO_NEST_BARS,
+        "holdout_fraction": float(holdout_fraction),
+        "n_ref_bars": 0, "n_slices": 0, "dropped_streams": [],
+    }
+    if not stream_datas:
+        return [], meta
+    era = _resolve_era_ref_index(stream_datas, start, min_streams, coverage)
+    if era is None:
+        return [], meta
+    ref_idx = era.ref_idx
+    n = len(ref_idx)
+    meta["n_ref_bars"] = n
+    holdout_bars = int(round(n * holdout_fraction))
+    active = n - holdout_bars
+    if holdout_bars <= 0 or active < 0 or active + EMBARGO_NEST_BARS >= n:
+        logger.info("build_holdout_slices: no usable holdout "
+                    "(n_ref_bars=%d, active=%d, embargo=%d)",
+                    n, active, EMBARGO_NEST_BARS)
+        return [], meta
+    holdout_start = ref_idx[active]
+    embargo_ts = ref_idx[active + EMBARGO_NEST_BARS]
+    meta["holdout_start"] = holdout_start
+    meta["embargo_ts"] = embargo_ts
+
+    slices: list[HoldoutSlice] = []
+    for sd in stream_datas:
+        df_h = sd.df.loc[sd.df.index >= embargo_ts]
+        prep = _prep_slice_frame(df_h)
+        if prep is None:
+            meta["dropped_streams"].append(sd.stream.stream_id)
+            continue
+        df_r, artifacts = prep
+        slices.append(HoldoutSlice(
+            stream=sd.stream, df=df_r, artifacts=artifacts,
+            start_ts=df_h.index[0], end_ts=df_h.index[-1]))
+    meta["n_slices"] = len(slices)
+    logger.info(
+        "build_holdout_slices: %d slices (holdout_start=%s, embargo_ts=%s, "
+        "embargo=%d bars, ref=%s, dropped=%s)",
+        len(slices), holdout_start, embargo_ts, EMBARGO_NEST_BARS,
+        era.ref_stream_id, meta["dropped_streams"],
+    )
+    return slices, meta
+
+
+def pooled_holdout_score(
+    stats: list[StreamStat], side: str,
+) -> tuple[float, dict[str, float]]:
+    """The OOS leg of ``pooled_fold_score`` on holdout stats (spec §A2).
+
+    Implemented NEXT TO fold scoring without modifying it: delegates to the
+    SAME ``pooled_side_score`` composite the OOS leg of ``pooled_fold_score``
+    uses (pinned by ``tests/test_holdout.py``), then maps the weighted
+    components onto the holdout reporting contract (``precision_w`` /
+    ``recall_w`` / ``n_signals`` / ``tp_mass`` / ``total_mass``).
+    """
+    score, comp = pooled_side_score(stats, side)
+    components = {
+        "score": float(score),
+        "precision_w": float(comp["precision"]),
+        "recall_w": float(comp["recall"]),
+        "n_signals": float(comp["n_signals"]),
+        "tp_mass": float(comp["tp_mass"]),
+        "total_mass": float(comp["total_mass"]),
+        "n_eff": float(comp["n_eff"]),
+        "n_unmatched": float(comp["n_unmatched"]),
+        "excess_penalty": float(comp["excess_penalty"]),
+        "frequency_factor": float(comp["frequency_factor"]),
+        "pooled_total_pivots": float(comp["pooled_total_pivots"]),
+    }
+    return float(score), components
+
+
+def holdout_era_pass(
+    holdout_score: float,
+    fold_scores: list[float],
+    min_ratio: float = ERA_PASS_MIN_RATIO,
+) -> bool:
+    """Pre-committed era_pass rule (spec §A3).
+
+    ``era_pass = holdout_score > 0 AND holdout_score >= min_ratio * mean(raw
+    winner fold scores)``. The mean is over the winner's RAW (unpenalized)
+    informative fold scores (``v17_acceptance.raw_fold_scores``). With an
+    empty basis the mean is taken as 0.0, so any positive holdout score
+    passes (the LCB is 0 in that case anyway — the verdict carries no risk).
+    """
+    score = float(holdout_score)
+    if not score > 0.0:
+        return False
+    fold_mean = float(np.mean(fold_scores)) if fold_scores else 0.0
+    return bool(score >= float(min_ratio) * fold_mean)
+
+
+def evaluate_holdout(
+    params: Params,
+    side: str,
+    slices: list[HoldoutSlice],
+    weights: dict[str, float],
+) -> tuple[float, dict[str, float], list[dict]]:
+    """Run the EXACT CPU detector on the holdout slices and pool (spec §A2).
+
+    Per slice: ``SpeculatorDetector`` -> ``_stream_stat`` (v5 weighted span
+    masses, cluster weights) -> ``pooled_holdout_score``. Returns
+    ``(score, components, per_stream)`` with per-stream lines sorted by
+    weighted matched mass (for the report's holdout tail).
+    """
+    if side not in ("high", "low"):
+        raise ValueError(f"side must be 'high' or 'low', got {side!r}")
+    sig_key = "signal_high" if side == "high" else "signal_low"
+    stats: list[StreamStat] = []
+    per_stream: list[dict] = []
+    for sl in slices:
+        w = weights.get(sl.stream.stream_id, 1.0)
+        det = SpeculatorDetector(sl.df, params, sl.artifacts).run()
+        st = _stream_stat(sl.df, det[sig_key], side, w)
+        stats.append(st)
+        per_stream.append({
+            "stream_id": sl.stream.stream_id,
+            "n_signals": int(st.n_signals),
+            "tp": int(st.tp),
+            "tp_mass": float(st.tp_mass),
+            "total_mass": float(st.total_mass),
+            "n_bars": int(st.n_bars),
+            "weight": float(w),
+            "start": str(sl.start_ts),
+            "end": str(sl.end_ts),
+        })
+    score, components = pooled_holdout_score(stats, side)
+    per_stream.sort(key=lambda e: (-(e["weight"] * e["tp_mass"]),
+                                   -e["n_signals"], e["stream_id"]))
+    return score, components, per_stream
 
 
 def cluster_weights(streams: list[Stream]) -> dict[str, float]:

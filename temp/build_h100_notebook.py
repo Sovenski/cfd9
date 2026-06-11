@@ -121,6 +121,13 @@ RNG_SEED = 69               #@param {type:"integer"}
 #@markdown LCBs stay RAW — this only steers the search away from overfiring.
 FIRING_PENALTY = 0.02       #@param {type:"number"}
 FIRING_CAP = 2.0            #@param {type:"number"}
+#@markdown **Pruning variants (§B3):** momentum-velocity was neutralized
+#@markdown (thresh -> ~0) in two independent v5 runs and was never load-bearing
+#@markdown in any era — RUN_PRUNED settles the three-era on/off question
+#@markdown head-to-head (baseline vs mom-vel off BOTH sides; the winner is
+#@markdown picked era_pass-first-then-deflated-LCB). Deeper prunes stay manual
+#@markdown shape_variants overrides.
+RUN_PRUNED = True           #@param {type:"boolean"}
 #@markdown **Fold geometry.** The centered 200-bar label window kills the first/last
 #@markdown 200 bars of every slice, so SMALL OOS slices have almost no scorable bars
 #@markdown (the default 0.03 leaves ~28 live bars -> all LCBs 0.0). Large slices:
@@ -139,6 +146,12 @@ from src.v17_runner import run_v17_gpu
 print('starting run_v17_gpu — fold/artifact build takes a few minutes before '
       'the first generation logs appear...', flush=True)
 
+shape_variants = ({
+    "baseline": {},
+    "pruned":   {"use_momentum_velocity_high": False,
+                 "use_momentum_velocity_low":  False},
+} if RUN_PRUNED else None)
+
 run_slug = f"v17gpu_{datetime.now().strftime('%Y%m%d_%H%M%S')}"
 out = run_v17_gpu(
     groups=[g.strip().upper() for g in GROUPS.split(',') if g.strip()],
@@ -152,6 +165,7 @@ out = run_v17_gpu(
     search_kw={"popsize": POPSIZE, "generations": GENERATIONS,
                "sobol_n": SOBOL_N, "top_k": TOP_K, "rng_seed": RNG_SEED},
     firing_penalty=FIRING_PENALTY, firing_cap=FIRING_CAP,
+    shape_variants=shape_variants,
     device="cuda",
 )
 print(json.dumps({s: {k: v for k, v in d.items() if k != 'trace'}
@@ -174,6 +188,29 @@ A(f"search:    {out.get('search')}  top_k={out.get('top_k')}  flip_rate={out.get
   f"  finalist_tol={out.get('finalist_tol')}")
 A(f"volume:    {out.get('volume_policy')}   groups={out.get('groups')} tf={out.get('timeframes')}")
 A(f"results:   {out.get('_written', '(not written)')}")
+_variants = out.get("variants") or {}
+if _variants:
+    # §B2 — variant comparison ABOVE the winner detail (winner per side
+    # picked era_pass-first, then deflated LCB; see winner_variant).
+    A("")
+    A(f"VARIANT COMPARISON (rule: era_pass first, then deflated LCB)"
+      f"   winner_variant={out.get('winner_variant')}")
+    A(f"  {'variant':<12s} {'side':<5s} {'raw_lcb':>10s} {'deflated':>10s}"
+      f" {'verdict':>8s} {'holdout':>8s} {'n_sig':>7s}")
+    for _name, _vd in _variants.items():
+        for _side, _d in (_vd.get("sides") or {}).items():
+            _acc = _d.get("acceptance", {})         # verdict per variant
+            _hd = _d.get("holdout") or {}           # era_pass per variant
+            _ns = (_hd.get("components") or {}).get("n_signals")  # n_signals
+            _raw = _d.get("final_lcb")              # raw final_lcb
+            _dfl = _d.get("final_lcb_deflated")     # final_lcb_deflated
+            _win = ("  <-- winner"
+                    if out.get("winner_variant", {}).get(_side) == _name
+                    else "")
+            A(f"  {_name:<12s} {_side:<5s} {_f(_raw):>10s} {_f(_dfl):>10s}"
+              f" {str(_acc.get('verdict')):>8s}"
+              f" {str(_hd.get('era_pass', 'n/a')):>8s}"
+              f" {_f(_ns, 1):>7s}{_win}")
 for side, d in out.get("sides", {}).items():
     acc = d.get("acceptance", {})
     defl = d.get("deflation", {})
@@ -191,6 +228,20 @@ for side, d in out.get("sides", {}).items():
       f"  pass={boot.get('pass')}   era_pass={acc.get('era_pass')}")
     A(f"evals:      {d.get('n_evals')}   finalists kept/dropped: "
       f"{d.get('n_finalists')}/{d.get('n_dropped_finalists')}")
+    hd = d.get("holdout") or {}
+    if hd:
+        A("")
+        A("HOLDOUT (selection-untouched OOS, embargoed reserved tail):")
+        A(f"  score {_f(hd.get('score'))} vs fold-mean {_f(hd.get('fold_mean'))}"
+          f"   ratio {_f(hd.get('ratio'), 3)} (min {hd.get('min_ratio')})"
+          f"   -> era_pass={hd.get('era_pass')}")
+        A(f"  n_slices={hd.get('n_slices')}  start={hd.get('holdout_start')}"
+          f"  embargo={hd.get('embargo_bars')} bars"
+          f"  n_signals={_f((hd.get('components') or {}).get('n_signals'), 1)}")
+        for ps in (hd.get("per_stream") or [])[:8]:
+            A(f"    {str(ps.get('stream_id')):<14s} n_sig={ps.get('n_signals'):>4}"
+              f"  tp_mass={_f(ps.get('tp_mass'), 2)} / total {_f(ps.get('total_mass'), 2)}"
+              f"  (w={_f(ps.get('weight'), 2)})")
     A("")
     A("changed thresholds vs seed:")
     changed = d.get("changed", [])

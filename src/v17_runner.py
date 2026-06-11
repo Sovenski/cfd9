@@ -15,19 +15,26 @@ this runner already accepts any seed Params, so wiring it is a drop-in.
 
 from __future__ import annotations
 
+import gc
 import json
 import logging
 from dataclasses import replace
 from pathlib import Path
 from typing import Optional
 
+import numpy as np
 import optuna
 
 from .indicators import Params
 from .pooled_validation import (
+    ERA_PASS_MIN_RATIO,
     StreamData,
     apply_volume_policy,
     build_calendar_folds,
+    build_holdout_slices,
+    cluster_weights,
+    evaluate_holdout,
+    holdout_era_pass,
     load_stream_frame,
     per_asset_high_diagnostic,
 )
@@ -91,9 +98,50 @@ def _ascend_with_progress(seed, scorer, side, grid_n, max_sweeps, show):
 _TF_SECONDS = {"1D": 86400.0, "1W": 604800.0, "60": 3600.0, "240": 14400.0, "1m": 60.0}
 
 
+def _effective_era_pass(
+    explicit: Optional[bool], holdout_pass: Optional[bool],
+) -> Optional[bool]:
+    """Spec §A4 override semantics: the holdout verdict fills ``era_pass``
+    UNLESS the caller passed one explicitly (an explicit value always wins)."""
+    return explicit if explicit is not None else holdout_pass
+
+
 def seed_from_trial_dict(trial_params: dict, side: str) -> Params:
     """Build a Params seed from a v16 best-trial dict via the exact mapping."""
     return params_from_trial(optuna.trial.FixedTrial(trial_params), side)
+
+
+def select_winner_variant(variants: dict[str, dict], side: str) -> str:
+    """Holdout-and-pruning spec §B2 selection rule (pre-committed).
+
+    era_pass FIRST: a holdout-passing variant always beats a failing one —
+    generalization to the selection-untouched tail outranks any in-search
+    number. THEN the deflated LCB (the honest headline for a batched search)
+    breaks ties within the same pass class. ``era_pass=None`` (holdout never
+    evaluated) counts as False. Exact ties keep the FIRST declared variant
+    (dict insertion order — "baseline" first by convention), so the rule is
+    deterministic.
+
+    Args:
+        variants: ``{name: {"sides": {side: per-side dict}}}`` as emitted by
+            ``run_v17_gpu(shape_variants=...)``.
+        side: ``"high"`` or ``"low"``.
+
+    Returns:
+        The winning variant name.
+
+    Raises:
+        ValueError: on an empty variants dict.
+    """
+    if not variants:
+        raise ValueError("select_winner_variant: empty variants dict")
+
+    def _key(item: tuple[str, dict]) -> tuple[bool, float]:
+        d = item[1]["sides"][side]
+        return (bool(d["acceptance"]["era_pass"]),
+                float(d["final_lcb_deflated"]))
+
+    return max(variants.items(), key=_key)[0]
 
 
 def run_v17(
@@ -238,11 +286,13 @@ def run_v17_gpu(
     flip_rate: float = 0.0,          # §2 spike: trust-kernel measured 0.0
     finalist_tol: float = 1e-9,
     device: str = "cpu",
-    era_pass: Optional[bool] = None,  # external era-robustness check, if any
+    era_pass: Optional[bool] = None,  # explicit override; None -> holdout rule
+    holdout: bool = True,             # spec §A4: evaluate the reserved tail
     tv_audit: bool = True,
     gpu_chunk: Optional[int] = None,  # RUNNER-side F9 knob (None = formula)
     firing_penalty: float = 0.02,     # SEARCH-only anti-spray lambda (raw objective unchanged)
     firing_cap: float = 2.0,          # tolerated weighted recall/precision ratio
+    shape_variants: Optional[dict[str, dict]] = None,  # §B1: name -> overrides
 ) -> dict:
     """GPU batched search -> EXACT CPU finalist re-score -> gates -> audit (§6).
 
@@ -257,6 +307,27 @@ def run_v17_gpu(
     Scorer v5 (spec §5): the output gains ``scorer: "v5"`` plus per-side
     ``calibration``, ``signal_cards``, ``r_multiple_backtest`` and a
     ``trace`` with ``scorer_version``/``calibration_block_hash``.
+
+    Holdout (holdout-and-pruning spec §A, ADDITIVE reporting): with
+    ``holdout=True`` the winner is also scored on the reserved final
+    ``holdout_fraction`` of the reference index (embargoed by 200 bars after
+    the active boundary; never touched by any fold). The pre-committed rule
+    ``holdout_era_pass`` (ERA_PASS_MIN_RATIO=0.5 of the mean raw fold score)
+    fills ``era_pass`` UNLESS the caller passed an explicit value; the block
+    lands in ``out["sides"][side]["holdout"]``. Fold scores and signal
+    arrays are byte-identical with or without it (tests/test_holdout.py).
+
+    Shape variants (holdout-and-pruning spec §B): ``shape_variants`` maps a
+    variant name to Params field overrides applied to the per-side seed via
+    ``dataclasses.replace`` BEFORE scorer construction. Each variant runs the
+    FULL per-side pipeline with FRESH scorers; GPU memory is freed between
+    variants (scorer refs dropped + ``torch.cuda.empty_cache()``; the memory
+    estimator re-logs per variant). ``None`` keeps the single-run behavior
+    unchanged (one unnamed "baseline" variant, no extra keys). With variants,
+    ``out["variants"][name]["sides"][side]`` carries every per-side dict,
+    ``out["winner_variant"]`` records the §B2 selection (era_pass first, then
+    deflated LCB — ``select_winner_variant``) and the top-level
+    ``out["sides"]`` is the per-side BEST variant.
 
     L4 memory (spec §6/F9): ``src/v17_gpu/**`` is FROZEN and exposes no
     chunk knob, so chunking is applied at the RUNNER level by partitioning
@@ -279,6 +350,11 @@ def run_v17_gpu(
 
     if any(side not in ("high", "low") for side in sides):
         raise ValueError(f"sides must be 'high'|'low', got {sides!r}")
+    if shape_variants is not None and (
+            not isinstance(shape_variants, dict) or not shape_variants):
+        raise ValueError(
+            "shape_variants must be None or a NON-EMPTY dict of "
+            f"name -> Params field overrides (§B1), got {shape_variants!r}")
 
     class _PopOptimizer(BatchOptimizer):
         """BatchOptimizer whose batch eval is F9-chunked ``score_pop`` calls."""
@@ -308,6 +384,19 @@ def run_v17_gpu(
         raise RuntimeError("No folds — pool too small/short.")
     logger.info("run_v17_gpu: %d folds; streams=%s; device=%s",
                 len(folds), [s.stream_id for s in kept], device)
+
+    # Spec §A1/§A4 — the selection-untouched holdout tail (built once; the
+    # slices are side-independent: labels cover both sides, artifacts are
+    # Params-free). Purely ADDITIVE: folds/search/scores are untouched.
+    holdout_slices, holdout_meta = ([], None)
+    if holdout:
+        holdout_slices, holdout_meta = build_holdout_slices(
+            stream_datas, **era_kw)
+        if not holdout_slices:
+            logger.warning("run_v17_gpu: holdout requested but no usable "
+                           "holdout slices (pool tail too short) — era_pass "
+                           "stays %r", era_pass)
+    pool_weights = cluster_weights(kept)
 
     kw = dict(search_kw or {})
     kw.setdefault("top_k", topk_for_flip_rate(flip_rate))
@@ -349,9 +438,16 @@ def run_v17_gpu(
         "sides": {},
     }
     artifacts_cache: dict[str, object] = {}  # Params-free, shared by sides
-    for side in sides:
-        seed = (seed_from_trial_dict(seed_params[side], side)
+                                             # AND variants (§B1)
+
+    def _seed_for(side: str) -> Params:
+        return (seed_from_trial_dict(seed_params[side], side)
                 if seed_params and side in seed_params else Params())
+
+    def _run_side(side: str, seed: Params) -> dict:
+        """The FULL §6 per-side pipeline for one seed (§B1 variant-aware):
+        fresh GPU scorer + search, EXACT CPU finalist re-score, gates,
+        holdout, calibration. Returns the per-side output dict."""
         gpu = GpuPooledScorer(folds=folds, streams=kept, side=side,
                               base_params=seed, device=device,
                               firing_penalty=firing_penalty,
@@ -359,6 +455,7 @@ def run_v17_gpu(
         opt = _PopOptimizer(seed=seed, scorer=gpu, side=side, config=cfg)
         opt.chunk = chunk
         res = opt.run()
+        del gpu, opt   # §B1: GPU scorer refs dropped before any next variant
 
         # Science contract (§6): finalists re-scored by the EXACT CPU scorer;
         # parity violations are HARD-dropped, never warned away.
@@ -377,12 +474,43 @@ def run_v17_gpu(
         changed = [(f, float(getattr(wp, f))) for f in res.coords
                    if float(getattr(wp, f)) != float(getattr(seed, f))]
         pinned = boundary_pinned(changed, side)
-        stab = bootstrap_stability(raw_fold_scores(real, wp))
-        verdict = summarize_acceptance(stab["pass"], bool(era_pass), pinned)
+        rfs = raw_fold_scores(real, wp)
+        stab = bootstrap_stability(rfs)
+
+        # Spec §A2-§A4 — holdout score on the winner -> era_pass (the
+        # explicit caller value, if any, always wins over the holdout rule).
+        holdout_block: Optional[dict] = None
+        side_era_pass = era_pass
+        if holdout and holdout_slices:
+            h_score, h_comp, h_per_stream = evaluate_holdout(
+                wp, side, holdout_slices, pool_weights)
+            fold_mean = float(np.mean(rfs)) if rfs else 0.0
+            h_pass = holdout_era_pass(h_score, rfs)
+            holdout_block = {
+                "score": float(h_score),
+                "components": h_comp,
+                "per_stream": h_per_stream[:12],
+                "era_pass": h_pass,
+                "n_slices": len(holdout_slices),
+                "holdout_start": str(holdout_meta["holdout_start"]),
+                "embargo_bars": holdout_meta["embargo_bars"],
+                "min_ratio": ERA_PASS_MIN_RATIO,
+                "fold_mean": fold_mean,
+                "ratio": (float(h_score) / fold_mean) if fold_mean > 0 else None,
+            }
+            side_era_pass = _effective_era_pass(era_pass, h_pass)
+            logger.info("[v17_gpu:%s] holdout score=%.5f fold_mean=%.5f "
+                        "ratio=%s min_ratio=%.2f -> era_pass=%s "
+                        "(explicit override=%r)",
+                        side, h_score, fold_mean,
+                        f"{holdout_block['ratio']:.3f}"
+                        if holdout_block["ratio"] is not None else "n/a",
+                        ERA_PASS_MIN_RATIO, h_pass, era_pass)
+        verdict = summarize_acceptance(stab["pass"], bool(side_era_pass), pinned)
 
         pop_scores = [float(c.score) for c in res.population]
         defl = deflated_best(final_lcb, pop_scores, n_trials=res.n_evals)
-        out["sides"][side] = {
+        block: dict = {
             "seed_lcb": res.seed_score,
             "final_lcb": final_lcb,
             "final_lcb_deflated": defl["deflated"],
@@ -401,7 +529,8 @@ def run_v17_gpu(
             "dropped": [{"gpu_lcb": e["gpu_lcb"], "cpu_lcb": e["cpu_lcb"],
                          "abs_diff": e["abs_diff"]} for e in dropped],
             "acceptance": {"verdict": verdict, "pinned": pinned,
-                           "bootstrap": stab, "era_pass": era_pass},
+                           "bootstrap": stab, "era_pass": side_era_pass},
+            "holdout": holdout_block,
         }
         # Spec §5 — Signal Card calibration on the winner (scorer v5 fields).
         # The FROZEN detector is only EXECUTED on the full stream histories;
@@ -409,7 +538,7 @@ def run_v17_gpu(
         cal = calibrate_for_run(stream_datas, wp, side=side,
                                 seed=cfg.rng_seed,
                                 artifacts_cache=artifacts_cache)
-        out["sides"][side].update({
+        block.update({
             "calibration": cal["calibration"],
             "signal_cards": cal["signal_cards"],
             "r_multiple_backtest": cal["r_multiple_backtest"],
@@ -421,11 +550,53 @@ def run_v17_gpu(
             diag["advisory"]["selection_percentile"] = float(
                 sum(sc < winner["gpu_lcb"] for sc in pop_scores)
             ) / max(len(pop_scores), 1)
-            out["sides"]["high"]["per_asset_diagnostic"] = diag
+            block["per_asset_diagnostic"] = diag
         logger.info("[v17_gpu:%s] seed=%.5f -> final=%.5f (%d evals, "
                     "%d finalists kept, %d dropped, verdict=%s)",
                     side, res.seed_score, final_lcb, res.n_evals,
                     len(survivors), len(dropped), verdict)
+        return block
+
+    if shape_variants is None:
+        # Current behavior — one unnamed "baseline" variant, no extra keys.
+        for side in sides:
+            out["sides"][side] = _run_side(side, _seed_for(side))
+    else:
+        # Spec §B1 — shape-variant outer loop: the FULL per-side pipeline per
+        # variant (fresh scorers; overrides via dataclasses.replace on the
+        # seed BEFORE scorer construction), sequentially.
+        out["variants"] = {}
+        n_var = len(shape_variants)
+        for vi, (name, overrides) in enumerate(shape_variants.items(), 1):
+            logger.info("=== shape variant %d/%d %r: overrides=%s ===",
+                        vi, n_var, name, overrides)
+            vsides: dict = {}
+            for side in sides:
+                vseed = replace(_seed_for(side), **(overrides or {}))
+                vsides[side] = _run_side(side, vseed)
+            out["variants"][name] = {"overrides": dict(overrides or {}),
+                                     "sides": vsides}
+            # §B1 — FREE GPU memory between variants (post-leak discipline):
+            # scorer refs were dropped inside _run_side; collect + empty the
+            # CUDA cache and RE-LOG the memory estimator per variant.
+            gc.collect()
+            import torch  # phase2_scan already imported it: cheap, present
+            torch.cuda.empty_cache()
+            logger.info(
+                "gpu memory estimate [variant=%s]: pool=%.2f GB + "
+                "work=%.2f GB = %.2f GB -> chunk=%d "
+                "(scorer refs dropped, cuda cache emptied)",
+                name, mem["pool_bytes"] / 1e9, mem["work_bytes"] / 1e9,
+                mem["total_bytes"] / 1e9, chunk)
+        # §B2 — winner per side: era_pass first, then deflated LCB.
+        out["winner_variant"] = {
+            side: select_winner_variant(out["variants"], side)
+            for side in sides}
+        out["sides"] = {
+            side: out["variants"][out["winner_variant"][side]]["sides"][side]
+            for side in sides}
+        logger.info("winner_variant (era_pass first, then deflated LCB): %s",
+                    out["winner_variant"])
 
     out["tv_audit"] = tv_export_audit(kept) if tv_audit else None
     if results_dir:
@@ -438,4 +609,5 @@ def run_v17_gpu(
 
 
 __all__ = ["run_v17", "run_v17_gpu", "seed_from_trial_dict",
-           "filter_finalists", "topk_for_flip_rate", "tv_export_audit"]
+           "select_winner_variant", "filter_finalists", "topk_for_flip_rate",
+           "tv_export_audit"]
