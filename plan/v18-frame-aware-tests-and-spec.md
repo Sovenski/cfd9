@@ -307,13 +307,15 @@ Expected: per-side AUC comparison lines + verdict rule. Runtime ~5 min.
 
 ## Part B — v18 conditional spec (decision matrix → branch)
 
-### Decision Matrix (fill from Part A — empty until tests run)
+### Decision Matrix (filled 2026-06-11; scripts: temp/frame_attribution.py + temp/frame_diag.py)
 
 | Test | HIGH | LOW | Measured numbers |
 |---|---|---|---|
-| T1 frame mask | ☐ | ☐ | |
-| T2 synchrony | ☐ | ☐ | |
-| T3 event-time | ☐ | ☐ | |
+| T1 frame mask | **FAIL** | **FAIL** | HIGH: clean 0.315 vs frame 0.235 (+0.080) but p=0.068, 7/14 streams, mask saturated (94% of fires frame-coincident). LOW: ±0.001, p=0.56. **Dose-response check (frame_frac terciles): flat, wrong direction (−0.008, p≈0.64) both sides** → the HIGH binary trend is a small-remnant/price-gate artifact, not a graded frame effect. |
+| T2 synchrony | **FAIL (non-measurement)** | **FAIL (non-measurement)** | sync == 0.0 at ~100% of fire bars (HIGH max 0.013; LOW 99.9% exactly 0). The detector fires long after extremeness onset (confirm/cooldown latency), so ≤3-bar freshness cannot discriminate at fires. Terciles compared identical populations — hypothesis untested as operationalized, not refuted. |
+| T3 event-time | ☐ | ☐ | pending (Task A2) |
+
+**Diagnostic finding worth keeping:** at fire bars, NO contributing scale crossed into extremeness within the last 3 bars — fires are universally *stale*-extremeness events. The fire bar sits well downstream of extremeness onset; any onset-timing information is upstream of where the detector samples it.
 
 ### Branch v18.A — Frame-Shift Mask *(build iff T1 PASS on ≥1 side)*
 
