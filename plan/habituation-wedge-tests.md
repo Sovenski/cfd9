@@ -87,3 +87,18 @@ same cooldown (7 bars) applied.
   vs all-bars.
 - If D1 fails → LOW's documented edge is naive-dip-replicable; Route D
   productization should use the simpler rule (or be re-examined).
+
+### D1/D2 RESULTS (2026-06-11, temp/dip_baseline.py)
+
+- **D1 location: FAIL.** Detector precision 0.286 vs naive dip-buyer 0.277 at
+  matched firing rates (diff **+0.008**, p=0.022 — statistically real but far
+  below the 3-point bar). The LOW detector locates bottoms essentially no
+  better than `low <= rolling N-bar min` with a cooldown.
+- **D2 payoff (report-only):** detector fires earn ~2x the naive forward
+  return (fwd20 +0.28% vs +0.15%; fwd40 +0.40% vs +0.20%). Location is
+  naive-replicable; the residual detector contribution, if any, is in WHICH
+  dips it selects (payoff quality), not WHERE it fires. Unregistered metric —
+  exploratory only.
+- **Consequence (per pre-registration):** LOW's edge claim is downgraded —
+  largely naive-dip + drift. Route D, if pursued, must either use the simpler
+  rule or justify the detector by the payoff delta under a registered test.
