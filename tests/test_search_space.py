@@ -51,6 +51,31 @@ def test_high_space_widens_only_its_two_floors():
             assert HIGH_SPACE.float_bounds[k] == FLOAT_BOUNDS[k], k
 
 
+#: v18 Phase 1 bounds repair (plan/v18-repair-spec.md) — measured pass-rate
+#: re-pin of the three structurally dead vote-threshold boxes:
+#:   slope_thresh    [0.01, 0.5] -> [0.1, 6.0]  (value is x1000-scaled;
+#:                                               new box spans ~46% -> ~5%)
+#:   vol_surge_thresh [1.0, 3.0] -> [1.0, 1.5]  (ratio q99=1.78; old upper
+#:                                               half dead; spans 19% -> ~3%)
+#:   gjr_vote_thresh [0.05, 0.5] -> [0.5, 3.0]  (paired with P2.2 unclip;
+#:                                               unclipped dist 40% -> 2%)
+#: har_vote_thresh stays [0.05, 0.5] (working range 19-41%, borderline OK).
+_V18_REPAIRED = {
+    "slope_thresh": (0.1, 6.0),
+    "vol_surge_thresh": (1.0, 1.5),
+    "gjr_vote_thresh": (0.5, 3.0),
+}
+
+
+def test_v18_phase1_bounds_repair_pins():
+    for k, bound in _V18_REPAIRED.items():
+        assert FLOAT_BOUNDS[k] == bound, k
+        # neither side overrides these — both inherit the repaired base box
+        assert LOW_SPACE.float_bounds[k] == bound, k
+        assert HIGH_SPACE.float_bounds[k] == bound, k
+    assert FLOAT_BOUNDS["har_vote_thresh"] == (0.05, 0.50)
+
+
 def test_categoricals_frozen_identical_between_sides():
     assert HIGH_SPACE.category_fields == LOW_SPACE.category_fields
     assert HIGH_SPACE.bool_fields == LOW_SPACE.bool_fields

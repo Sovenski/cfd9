@@ -36,14 +36,20 @@ FLOAT_BOUNDS: dict[str, tuple[float, float]] = {
     "pct_extreme": (0.70, 0.99),
     "min_agreement": (0.10, 0.90),
     "dur_extreme_pct": (0.50, 0.99),
-    "vol_surge_thresh": (1.0, 3.0),
+    # v18 Phase 1 bounds repair (plan/v18-repair-spec.md): ratio q99=1.78,
+    # the old [1.0, 3.0] upper half was dead; new box spans 19% -> ~3%.
+    "vol_surge_thresh": (1.0, 1.5),
     "scale_div_thresh": (0.10, 0.60),
-    "slope_thresh": (0.01, 0.50),
+    # v18 Phase 1: value is x1000-scaled (dist -12..+9); old [0.01, 0.5] was
+    # structurally always-pass; new box spans ~46% -> ~5% pass-rate.
+    "slope_thresh": (0.1, 6.0),
     "vola_high_pct": (0.50, 0.99),
     "pivot_drift_thresh": (0.001, 0.050),
     "pivot_drift_gate_mult": (1.0, 10.0),
     "momentum_velocity_thresh": (0.0, 0.05),
-    "gjr_vote_thresh": (0.05, 0.50),
+    # v18 Phase 1: paired with the P2.2 gjr unclip; unclipped dist spans
+    # 40% -> 2% over the new box (old [0.05, 0.5] sat inside the clip rail).
+    "gjr_vote_thresh": (0.5, 3.0),
     "har_vote_thresh": (0.05, 0.50),
 }
 

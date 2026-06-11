@@ -168,9 +168,13 @@ def stdev(series: pd.Series, n: int) -> pd.Series:
 
 
 def pir_of(val: pd.Series, lb: int) -> pd.Series:
-    """Percent-in-range: normalize *val* to [0, 1] over a rolling window."""
-    lo = val.rolling(lb).min()
-    hi = val.rolling(lb).max()
+    """Percent-in-range: normalize *val* to [0, 1] over a rolling window.
+
+    PINE-FAITHFUL (2026-06-11 e830d audit): partial windows during warm-up,
+    matching Pine's scan over available bars.
+    """
+    lo = val.rolling(lb, min_periods=1).min()
+    hi = val.rolling(lb, min_periods=1).max()
     span = (hi - lo).clip(lower=1e-10)
     result = (val - lo) / span
     # When hi == lo the span is effectively zero — return 0.5
