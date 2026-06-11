@@ -111,6 +111,17 @@ def test_raw_and_penalized_on_stub(monkeypatch: pytest.MonkeyPatch) -> None:
         expected, n_boot=400, alpha=0.10, block_len=2)[0])
 
 
+def test_v5_1_firing_cap_defaults_are_one() -> None:
+    """v5.1 anti-spray: the tolerated recall/precision ratio default drops
+    2.0 -> 1.0 in BOTH the acceptance gate (firing_excess / PenalizedScorer)
+    so the search regularizer and the gate share one tolerance."""
+    import inspect
+
+    assert inspect.signature(firing_excess).parameters["cap"].default == 1.0
+    scorer = SimpleNamespace(n_boot=400, alpha=0.10, block_len=2)
+    assert PenalizedScorer(scorer=scorer).firing_cap == 1.0
+
+
 def test_penalized_empty_folds_returns_zero(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr(accept, "_iter_fold_scores", lambda scorer, params: iter(()))
     scorer = SimpleNamespace(n_boot=400, alpha=0.10, block_len=2)

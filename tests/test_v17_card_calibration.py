@@ -70,7 +70,7 @@ def payload():
 
 
 def test_payload_required_keys_and_scorer_v5(payload):
-    assert payload["scorer"] == "v5"
+    assert payload["scorer"] == "v5.1"
     assert payload["side"] == "low"
     assert set(payload) >= {"scorer", "side", "calibration",
                             "calibration_block_hash", "signal_cards",
@@ -175,7 +175,7 @@ def test_zero_signal_pool_is_degenerate_not_a_crash():
     df, _ = _v_stream(seed=3)
     out = calibrate_run({"A_1D": df}, {"A_1D": np.zeros(len(df), dtype=bool)},
                         side="low", seed=0, n_boot=50)
-    assert out["scorer"] == "v5"
+    assert out["scorer"] == "v5.1"
     assert out["calibration"]["degenerate"] is True
     assert out["signal_cards"] == []
     assert out["r_multiple_backtest"]["n_signals"] == 0.0

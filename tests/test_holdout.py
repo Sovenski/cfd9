@@ -347,7 +347,15 @@ def test_run_v17_gpu_emits_holdout_block_and_sets_era_pass(tmp_path):
         results_dir=str(tmp_path / "results"),
     )
 
+    # v5.1 era marker: the objective bump is labelled so v5 and v5.1 LCBs are
+    # never silently compared, and the pricing that defines the era is recorded.
+    assert out["scorer"] == "v5.1"
+    assert out["firing_cap"] == 1.0
+    assert out["pricing"] == {"w_fp": 0.5, "firing_penalty": out["firing_penalty"],
+                              "firing_cap": 1.0}
+
     side = out["sides"]["low"]
+    assert side["trace"]["scorer_version"] == "v5.1"
     hd = side["holdout"]
     assert hd is not None
     # spec §A4 field contract

@@ -32,8 +32,12 @@ if TYPE_CHECKING:  # pragma: no cover - typing only, avoids import cycles
     from .indicators import Params
 
 
-def firing_excess(precision: float, recall: float, cap: float = 2.0) -> float:
+def firing_excess(precision: float, recall: float, cap: float = 1.0) -> float:
     """Per-fold firing penalty: max(0, (recall/precision) - cap).
+
+    v5.1: the default tolerated ratio drops 2.0 -> 1.0 so the acceptance gate
+    and the search regularizer (``GpuPooledScorer.firing_cap``) share one
+    anti-spray tolerance (project_scorer_v5_era).
 
     The ratio measures firing intensity per available pivot credit, so this
     penalizes folds that fire more than ``cap`` signals per pivot unit (the
@@ -143,7 +147,7 @@ class PenalizedScorer:
 
     scorer: object
     firing_penalty: float = 0.0
-    firing_cap: float = 2.0
+    firing_cap: float = 1.0   # v5.1 — shared anti-spray tolerance (see firing_excess)
 
     def score(self, params: "Params") -> float:
         fs: list[float] = []

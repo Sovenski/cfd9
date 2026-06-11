@@ -39,6 +39,7 @@ from .pooled_validation import (
     per_asset_high_diagnostic,
 )
 from .scoring import add_pivot_labels
+from .scoring_v5 import SCORER_VERSION, W_FP
 from .speculatores145 import params_from_trial
 from .universe import resolve_streams
 from .v17_acceptance import (
@@ -291,7 +292,7 @@ def run_v17_gpu(
     tv_audit: bool = True,
     gpu_chunk: Optional[int] = None,  # RUNNER-side F9 knob (None = formula)
     firing_penalty: float = 0.02,     # SEARCH-only anti-spray lambda (raw objective unchanged)
-    firing_cap: float = 2.0,          # tolerated weighted recall/precision ratio
+    firing_cap: float = 1.0,          # v5.1 tolerated weighted recall/precision ratio (was 2.0)
     shape_variants: Optional[dict[str, dict]] = None,  # §B1: name -> overrides
 ) -> dict:
     """GPU batched search -> EXACT CPU finalist re-score -> gates -> audit (§6).
@@ -304,9 +305,12 @@ def run_v17_gpu(
     ``v17_acceptance`` gates run on the winner; ``tv_export_audit`` records
     per-asset Pine parity. Every reported number is the CPU detector's.
 
-    Scorer v5 (spec §5): the output gains ``scorer: "v5"`` plus per-side
-    ``calibration``, ``signal_cards``, ``r_multiple_backtest`` and a
-    ``trace`` with ``scorer_version``/``calibration_block_hash``.
+    Scorer v5 (spec §5): the output gains ``scorer`` (the SCORER_VERSION era
+    marker, ``"v5.1"``) and a ``pricing`` block (w_fp / firing_penalty /
+    firing_cap) plus per-side ``calibration``, ``signal_cards``,
+    ``r_multiple_backtest`` and a ``trace`` with
+    ``scorer_version``/``calibration_block_hash``. The era marker keeps LCBs
+    from different pricing eras comparable only BY LABEL.
 
     Holdout (holdout-and-pruning spec §A, ADDITIVE reporting): with
     ``holdout=True`` the winner is also scored on the reserved final
@@ -427,10 +431,15 @@ def run_v17_gpu(
         "run_slug": run_slug, "groups": groups, "timeframes": timeframes,
         "volume_policy": volume_policy, "n_folds": len(folds),
         "streams": [s.stream_id for s in kept],
-        "search": "cma-gpu", "device": device, "scorer": "v5",
+        "search": "cma-gpu", "device": device, "scorer": SCORER_VERSION,
         "flip_rate": flip_rate, "top_k": cfg.top_k,
         "finalist_tol": finalist_tol,
         "firing_penalty": firing_penalty, "firing_cap": firing_cap,
+        # v5.1 era marker: the pricing that defines this objective era, so
+        # LCBs from different eras are never silently compared (compared
+        # only by-label — project_scorer_v5_era).
+        "pricing": {"w_fp": W_FP, "firing_penalty": firing_penalty,
+                    "firing_cap": firing_cap},
         "gpu_memory": {**mem, "budget_bytes": BUDGET_BYTES,
                        "bytes_per_candidate_bar": BYTES_PER_CANDIDATE_BAR,
                        "chunk": chunk,
@@ -542,7 +551,7 @@ def run_v17_gpu(
             "calibration": cal["calibration"],
             "signal_cards": cal["signal_cards"],
             "r_multiple_backtest": cal["r_multiple_backtest"],
-            "trace": {"scorer_version": "v5",
+            "trace": {"scorer_version": SCORER_VERSION,
                       "calibration_block_hash": cal["calibration_block_hash"]},
         })
         if side == "high":

@@ -30,6 +30,7 @@ from src.scoring import RECALL_TARGET, REFERENCE_N, add_pivot_labels, label_pivo
 from src.scoring_v5 import (
     MATCH_WINDOW,
     REFERENCE_MASS,
+    SCORER_VERSION,
     SPAN_GRID,
     TIEBREAK_EPS,
     W_FP,
@@ -93,15 +94,24 @@ def test_span_grid_pinned():
 def test_span_weights_exact_for_every_grid_value():
     for g in SPAN_GRID:
         assert span_weight(g) == pytest.approx(g / REFERENCE_N, abs=0.0)
-    assert W_FP == pytest.approx(0.2) == pytest.approx(span_weight(20))
+    # v5.1 pricing: a false signal now costs 0.5 mass = 2.5 floor (N*=20) events
+    # (was 0.2 = one floor event under v5). The optimizer's spray incentive is
+    # priced 2.5x higher; the version marker keeps v5 and v5.1 LCBs comparable
+    # only by-label (project_scorer_v5_era).
+    assert W_FP == pytest.approx(0.5) == pytest.approx(2.5 * span_weight(20))
     assert REFERENCE_MASS == pytest.approx(54.0) == pytest.approx(27 * span_weight(200))
+
+
+def test_scorer_version_is_v5_1():
+    """v5.1 objective bump — the era marker that keeps LCBs comparable-by-label."""
+    assert SCORER_VERSION == "v5.1"
 
 
 def test_w_fp_exchange_rate_documented_at_definition_site():
     """F3(a): the exchange-rate meaning is load-bearing documentation."""
     src = inspect.getsource(scoring_v5)
     assert "W_FP" in src
-    assert "ten false signals cost one T1" in src
+    assert "four false signals cost one T1" in src
 
 
 def test_grid_floor_truncates_span_to_largest_grid_value_passed():
@@ -264,7 +274,7 @@ def test_compute_side_score_v5_hand_computed():
     expected = (precision ** 1.2) * recall_sat * 1.0 * (2 * 3 * 4 / (9 + 16))
     score = compute_side_score_v5(stats)
     assert score == pytest.approx(expected)
-    assert score == pytest.approx(0.2469, abs=5e-4)   # independent hand pin
+    assert score == pytest.approx(0.2118, abs=5e-4)   # independent hand pin (v5.1, w_fp=0.5)
     # w_FP sensitivity direction: a higher FP price lowers the score
     assert compute_side_score_v5(stats, w_fp=1.0) < compute_side_score_v5(stats, w_fp=0.2)
 

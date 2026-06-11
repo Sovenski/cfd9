@@ -232,9 +232,11 @@ def test_run_v17_gpu_end_to_end_two_asset_pool(tmp_path):
     from src.scoring_v5 import SPAN_GRID
     from src.v17_card.gpu_memory import BUDGET_BYTES
 
-    assert out["scorer"] == "v5"
+    assert out["scorer"] == "v5.1"               # v5.1 era marker
+    assert out["pricing"] == {"w_fp": 0.5, "firing_penalty": out["firing_penalty"],
+                              "firing_cap": 1.0}
     trace = side["trace"]
-    assert trace["scorer_version"] == "v5"
+    assert trace["scorer_version"] == "v5.1"
     assert len(trace["calibration_block_hash"]) == 64
     cal = side["calibration"]
     assert cal["grid"] == SPAN_GRID and cal["degenerate"] is False
@@ -258,7 +260,7 @@ def test_run_v17_gpu_end_to_end_two_asset_pool(tmp_path):
 
     # --- the §5 run JSON must round-trip strictly (no NaN leakage) ----------
     written = json.loads(Path(out["_written"]).read_text())
-    assert written["scorer"] == "v5"
+    assert written["scorer"] == "v5.1"
     json.loads(json.dumps(written["sides"]["low"]["calibration"],
                           allow_nan=False))
 

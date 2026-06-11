@@ -39,14 +39,23 @@ _NB = _REPO / "h100_v17_gpu.ipynb"
 #: intentionally adds the RUN_PRUNED checkbox + the baseline/pruned
 #: ``shape_variants`` (mom-vel off both sides) to Cell 5; the new content is
 #: asserted in tests/test_shape_variants.py (test_cell5_run_pruned_*).
+#: Cell 5 RE-PINNED AGAIN 2026-06-11: v5.1 anti-spray re-pricing lowers the
+#: Cell-5 ``FIRING_CAP`` default 2.0 -> 1.0 (matches the run_v17_gpu default);
+#: the new value is asserted below (test_cell5_firing_cap_is_v5_1_default).
 _PRE_CHANGE_CELL_SHA256 = [
     "694cc61d0520b2b596488663a133a241b2acfcdaeb42eac1c22ecb1707796409",  # 0 md intro
     "021625f0c9aec826339563fccf713c8bdcdc33c049a82272f60a3633a753b2e6",  # 1 mount
     "d4de24c91407fa5f670fa35206227e933be1e782158e630cc7aae3d14389b0b6",  # 2 clone
     "79f036c65d62bbb6feb18f85f06d9dc4f47fccf954a329b74df22664b98ff17b",  # 3 settings
     "4ec943aa666a08fb9070aec11f2fdaaea233f70b9bff5608b8d8dfc8c7eadb83",  # 4 validate
-    "dfcbadcd5fa2241c6c71e9fe55898db967c2ecaec38d4bf2fac1d83cbdc93d1b",  # 5 run (§B3)
+    "7127dd748af5ab4847e05b8d91ffc95b663acc3a36f4f0e302a8b275a522e824",  # 5 run (§B3 + v5.1 cap)
 ]
+
+
+def test_cell5_firing_cap_is_v5_1_default(notebook):
+    """v5.1 re-pricing: the Cell-5 form default matches run_v17_gpu (1.0)."""
+    src = _src(notebook.cells[5])
+    assert "FIRING_CAP = 1.0" in src
 
 
 def _src(cell) -> str:

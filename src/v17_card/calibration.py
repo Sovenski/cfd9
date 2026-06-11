@@ -34,7 +34,7 @@ from typing import Optional, Sequence, Union
 import numpy as np
 import pandas as pd
 
-from ..scoring_v5 import SPAN_GRID, MATCH_WINDOW
+from ..scoring_v5 import SCORER_VERSION, SPAN_GRID, MATCH_WINDOW
 from .conditioning import conditional_survival, expected_hold
 from .expected_move import CSideFit, SignalRecord, expected_move, fit_c_side
 from .grading import SignalGrade, _assign_matches, backtest_summary, grade_signals
@@ -214,7 +214,7 @@ def _degenerate_payload(side: str, n_streams: int) -> dict:
     }
     calibration = _jsonify(calibration)
     return {
-        "scorer": "v5", "side": side, "calibration": calibration,
+        "scorer": SCORER_VERSION, "side": side, "calibration": calibration,
         "calibration_block_hash": _hash_block(calibration),
         "signal_cards": [],
         "r_multiple_backtest": _jsonify({**backtest_summary([]),
@@ -346,7 +346,7 @@ def calibrate_run(
             c_fit.r_squared, censored_excluded, bands.method),
     })
     payload = {
-        "scorer": "v5", "side": side, "calibration": calibration,
+        "scorer": SCORER_VERSION, "side": side, "calibration": calibration,
         "calibration_block_hash": _hash_block(calibration),
         "signal_cards": _jsonify(cards),
         "r_multiple_backtest": _jsonify({**backtest_summary(grades),

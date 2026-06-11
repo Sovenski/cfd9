@@ -120,7 +120,7 @@ RNG_SEED = 69               #@param {type:"integer"}
 #@markdown signal mass than they hit (weighted recall/precision > cap). Reported
 #@markdown LCBs stay RAW — this only steers the search away from overfiring.
 FIRING_PENALTY = 0.02       #@param {type:"number"}
-FIRING_CAP = 2.0            #@param {type:"number"}
+FIRING_CAP = 1.0            #@param {type:"number"}  # v5.1: tolerated recall/precision ratio (was 2.0)
 #@markdown **Pruning variants (§B3):** momentum-velocity was neutralized
 #@markdown (thresh -> ~0) in two independent v5 runs and was never load-bearing
 #@markdown in any era — RUN_PRUNED settles the three-era on/off question

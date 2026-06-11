@@ -51,13 +51,21 @@ logger = logging.getLogger(__name__)
 #: Scorer-v3 minor-dip lesson; the floor is deliberate and load-bearing).
 SPAN_GRID: list[int] = [20, 30, 40, 50, 70, 100, 140, 200, 300, 500]
 
+#: SCORER_VERSION — the objective era marker. A change to the pricing below
+#: (W_FP) changes the objective, so LCBs from different eras are comparable
+#: only BY LABEL: every run records this string in its trace and top-level
+#: meta (project_scorer_v5_era). v5.0 -> v5.1 bumped W_FP 0.2 -> 0.5 and the
+#: firing-cap default 2.0 -> 1.0 (2026-06-11 anti-spray re-pricing).
+SCORER_VERSION: str = "v5.1"
+
 #: W_FP — the price of a false signal in pivot-mass units (spec §2.2, F3).
-#: Exchange-rate semantics: at the default 0.2 one false signal costs one
-#: floor-grade (N*=20) event, i.e. ten false signals cost one T1 (N*=200)
-#: hit. This single constant controls the optimizer's spray incentive; its
+#: Exchange-rate semantics: at the v5.1 default 0.5 one false signal costs
+#: 2.5 floor-grade (N*=20) events, i.e. four false signals cost one T1
+#: (N*=200) hit — a 2.5x higher spray price than the v5.0 default of 0.2.
+#: This single constant controls the optimizer's spray incentive; its
 #: default is justified by the mandatory sensitivity test
 #: (``tests/test_scorer_v5.py::test_w_fp_sensitivity_firing_gate_catches_spray``).
-W_FP: float = 0.2
+W_FP: float = 0.5
 
 #: REFERENCE_MASS — the v4-equivalent recall-target basis (spec §2.2, F4):
 #: 27 SPX T1 highs at w(200) = 2.0 each => 54.0. Pinned ONCE here; the
@@ -343,6 +351,7 @@ def compute_side_score_v5(
 
 
 __all__ = [
+    "SCORER_VERSION",
     "SPAN_GRID", "W_FP", "REFERENCE_MASS", "MATCH_WINDOW", "TIEBREAK_EPS",
     "WeightedStats", "span_weight", "label_pivot_spans", "compute_left_span",
     "match_signals_weighted", "weighted_precision", "weighted_recall",
