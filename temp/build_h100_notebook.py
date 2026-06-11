@@ -128,6 +128,14 @@ FIRING_CAP = 1.0            #@param {type:"number"}  # v5.1: tolerated recall/pr
 #@markdown picked era_pass-first-then-deflated-LCB). Deeper prunes stay manual
 #@markdown shape_variants overrides.
 RUN_PRUNED = True           #@param {type:"boolean"}
+#@markdown **Feature ablation (leave-one-out importance):** turns ON every vote
+#@markdown feature both sides, then searches all-on plus one 'minus-one-feature'
+#@markdown variant per feature (8 variants/side). Cell 6 prints the HOLDOUT-score
+#@markdown delta per feature = its marginal contribution (signed: <0 means the
+#@markdown model generalizes BETTER without it). EXPENSIVE — 8x the search; for a
+#@markdown screening sweep, lower GENERATIONS (~12-15). Takes precedence over
+#@markdown RUN_PRUNED. Set False for production runs.
+RUN_ABLATION = True         #@param {type:"boolean"}
 #@markdown **Fold geometry.** The centered 200-bar label window kills the first/last
 #@markdown 200 bars of every slice, so SMALL OOS slices have almost no scorable bars
 #@markdown (the default 0.03 leaves ~28 live bars -> all LCBs 0.0). Large slices:
@@ -142,15 +150,19 @@ import logging, json
 logging.basicConfig(level=logging.INFO, force=True,
                     format="%(asctime)s %(levelname)s %(name)s: %(message)s")
 from src.v17_runner import run_v17_gpu
+from src.v17_ablation import build_ablation_variants
 
 print('starting run_v17_gpu — fold/artifact build takes a few minutes before '
       'the first generation logs appear...', flush=True)
 
-shape_variants = ({
-    "baseline": {},
-    "pruned":   {"use_momentum_velocity_high": False,
-                 "use_momentum_velocity_low":  False},
-} if RUN_PRUNED else None)
+# RUN_ABLATION (leave-one-out, all votes on) takes precedence over RUN_PRUNED.
+shape_variants = (
+    build_ablation_variants() if RUN_ABLATION
+    else ({
+        "baseline": {},
+        "pruned":   {"use_momentum_velocity_high": False,
+                     "use_momentum_velocity_low":  False},
+    } if RUN_PRUNED else None))
 
 run_slug = f"v17gpu_{datetime.now().strftime('%Y%m%d_%H%M%S')}"
 out = run_v17_gpu(
@@ -211,6 +223,20 @@ if _variants:
               f" {str(_acc.get('verdict')):>8s}"
               f" {str(_hd.get('era_pass', 'n/a')):>8s}"
               f" {_f(_ns, 1):>7s}{_win}")
+    # Leave-one-out feature importance (only when this is an ablation run).
+    if "all_on" in _variants:
+        from src.v17_ablation import ablation_deltas
+        A("")
+        A("ABLATION — leave-one-out HOLDOUT importance per feature")
+        A("  (delta = holdout(all_on) - holdout(minus_feature);  >0 the feature")
+        A("   HELPS the reserved tail, <0 the model generalizes BETTER without it):")
+        for _side in (out.get("sides") or {}):
+            try:
+                _dz = ablation_deltas(out, _side)
+            except (KeyError, TypeError):
+                continue
+            A(f"  {_side.upper()}:  " + "  ".join(
+                f"{_feat}={_dlt:+.4f}" for _feat, _dlt in _dz.items()))
 for side, d in out.get("sides", {}).items():
     acc = d.get("acceptance", {})
     defl = d.get("deflation", {})

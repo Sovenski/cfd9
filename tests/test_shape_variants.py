@@ -344,6 +344,25 @@ def test_cell5_run_pruned_checkbox_passes_variant_configs(notebook):
     compile(src, "<cell5>", "exec")
 
 
+def test_cell5_run_ablation_passes_leave_one_out_variants(notebook):
+    src = _src(notebook.cells[5])
+    norm = " ".join(src.split())
+    assert 'RUN_ABLATION = True #@param {type:"boolean"}' in norm
+    assert "build_ablation_variants" in norm
+    # ablation takes precedence over the pruned/baseline dict
+    assert "if RUN_ABLATION else" in norm
+    assert "shape_variants=shape_variants" in norm
+    compile(src, "<cell5>", "exec")
+
+
+def test_cell6_ablation_delta_table_when_all_on_present(notebook):
+    src = _src(notebook.cells[6])
+    assert "ablation_deltas" in src
+    assert "ABLATION" in src               # the LOO importance section header
+    assert "all_on" in src                 # presence gate for the ablation table
+    compile(src, "<cell6>", "exec")
+
+
 def test_cell6_variant_comparison_table_above_winner_detail(notebook):
     src = _src(notebook.cells[6])
     assert "VARIANT COMPARISON" in src
