@@ -12,27 +12,43 @@ from src.search_space import (
 )
 
 
-def test_low_space_reproduces_today_bounds_exactly():
-    # LOW must be byte-identical to the historical (symmetric) bounds.
+#: 2026-06-11 aggressive widen — the big-run (v17gpu_20260610_225518) boundary
+#: pins, each extended in its pinned direction (v5.1 spray pricing is the
+#: counterweight). LOW relaxes four; HIGH relaxes its two floors further.
+_LOW_WIDENED = {
+    "pct_extreme": (0.40, 0.99),        # pin lo 0.70 -> 0.40
+    "min_agreement": (0.02, 0.90),      # pin lo 0.10 -> 0.02
+    "scale_div_thresh": (0.10, 0.95),   # pin hi 0.60 -> 0.95
+    "pivot_drift_thresh": (0.0001, 0.050),  # pin lo 0.001 -> 0.0001
+}
+_HIGH_WIDENED = {
+    "dur_extreme_pct": (0.10, 0.99),    # pin lo 0.30 -> 0.10
+    "pct_extreme": (0.30, 0.99),        # pin lo 0.55 -> 0.30
+}
+
+
+def test_low_space_widens_only_the_four_big_run_pins():
     assert LOW_SPACE.int_bounds == INT_BOUNDS
-    assert LOW_SPACE.float_bounds == FLOAT_BOUNDS
     assert LOW_SPACE.bool_fields == tuple(BOOL_FIELDS)
     assert LOW_SPACE.category_fields == {
         k: tuple(v) for k, v in CATEGORY_FIELDS.items()
     }
+    for k, bound in _LOW_WIDENED.items():
+        assert LOW_SPACE.float_bounds[k] == bound, k
+    # every other LOW float bound is the historical base, untouched
+    for k in FLOAT_BOUNDS:
+        if k not in _LOW_WIDENED:
+            assert LOW_SPACE.float_bounds[k] == FLOAT_BOUNDS[k], k
 
 
-def test_high_space_differs_only_in_two_floors():
-    # Ints identical.
+def test_high_space_widens_only_its_two_floors():
     assert HIGH_SPACE.int_bounds == LOW_SPACE.int_bounds
-    # Exactly the two relaxed floors differ; everything else identical.
-    differing = {
-        k for k in FLOAT_BOUNDS
-        if HIGH_SPACE.float_bounds[k] != LOW_SPACE.float_bounds[k]
-    }
-    assert differing == {"dur_extreme_pct", "pct_extreme"}
-    assert HIGH_SPACE.float_bounds["dur_extreme_pct"] == (0.30, 0.99)
-    assert HIGH_SPACE.float_bounds["pct_extreme"] == (0.55, 0.99)
+    for k, bound in _HIGH_WIDENED.items():
+        assert HIGH_SPACE.float_bounds[k] == bound, k
+    # every other HIGH float bound is the historical base (HIGH did not pin them)
+    for k in FLOAT_BOUNDS:
+        if k not in _HIGH_WIDENED:
+            assert HIGH_SPACE.float_bounds[k] == FLOAT_BOUNDS[k], k
 
 
 def test_categoricals_frozen_identical_between_sides():
@@ -80,14 +96,17 @@ def _trial_distributions(side: str):
 
 def test_high_floor_relaxed_in_actual_sampling():
     dists = _trial_distributions("high")
-    assert dists["high_dur_extreme_pct"].low == 0.30
-    assert dists["high_pct_extreme"].low == 0.55
+    assert dists["high_dur_extreme_pct"].low == 0.10
+    assert dists["high_pct_extreme"].low == 0.30
 
 
-def test_low_floor_unchanged_in_actual_sampling():
+def test_low_floor_widened_in_actual_sampling():
     dists = _trial_distributions("low")
-    assert dists["low_dur_extreme_pct"].low == 0.50
-    assert dists["low_pct_extreme"].low == 0.70
+    assert dists["low_dur_extreme_pct"].low == 0.50      # NOT pinned -> unchanged
+    assert dists["low_pct_extreme"].low == 0.40
+    assert dists["low_min_agreement"].low == 0.02
+    assert dists["low_scale_div_thresh"].high == 0.95
+    assert dists["low_pivot_drift_thresh"].low == 0.0001
 
 
 def test_trial_keys_unchanged_for_journal_compatibility():

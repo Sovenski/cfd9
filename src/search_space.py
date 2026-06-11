@@ -90,18 +90,30 @@ def _freeze_categories(cats: dict[str, list[str]]) -> dict[str, tuple[str, ...]]
     return {k: tuple(v) for k, v in cats.items()}
 
 
+# LOW: widen the four big-run boundary pins (v17gpu_20260610_225518), each in
+# its pinned direction (2026-06-11 aggressive widen). The v5.1 spray pricing
+# (W_FP 0.5, firing cap 1.0) is the counterweight that lets the optimizer
+# explore the looser corner without being rewarded for overfiring.
+# FLOAT_BOUNDS stays the historical reference; every non-pinned bound is reused.
+_LOW_FLOAT_BOUNDS = dict(FLOAT_BOUNDS)
+_LOW_FLOAT_BOUNDS["pct_extreme"] = (0.40, 0.99)          # pin lo 0.70 -> 0.40
+_LOW_FLOAT_BOUNDS["min_agreement"] = (0.02, 0.90)        # pin lo 0.10 -> 0.02
+_LOW_FLOAT_BOUNDS["scale_div_thresh"] = (0.10, 0.95)     # pin hi 0.60 -> 0.95
+_LOW_FLOAT_BOUNDS["pivot_drift_thresh"] = (0.0001, 0.050)  # pin lo 0.001 -> 0.0001
+
 LOW_SPACE = SearchSpace(
     int_bounds=types.MappingProxyType(dict(INT_BOUNDS)),
-    float_bounds=types.MappingProxyType(dict(FLOAT_BOUNDS)),
+    float_bounds=types.MappingProxyType(_LOW_FLOAT_BOUNDS),
     bool_fields=tuple(BOOL_FIELDS),
     category_fields=types.MappingProxyType(_freeze_categories(CATEGORY_FIELDS)),
     trial_key_overrides=types.MappingProxyType(dict(_TRIAL_KEY_OVERRIDES)),
 )
 
-# HIGH: identical to LOW except two relaxed floors (spec §3).
+# HIGH: relax its two pinned floors further off the historical base (the
+# big-run HIGH winner sat exactly on both). Non-pinned bounds reuse the base.
 _HIGH_FLOAT_BOUNDS = dict(FLOAT_BOUNDS)
-_HIGH_FLOAT_BOUNDS["dur_extreme_pct"] = (0.30, 0.99)
-_HIGH_FLOAT_BOUNDS["pct_extreme"] = (0.55, 0.99)
+_HIGH_FLOAT_BOUNDS["dur_extreme_pct"] = (0.10, 0.99)     # pin lo 0.30 -> 0.10
+_HIGH_FLOAT_BOUNDS["pct_extreme"] = (0.30, 0.99)         # pin lo 0.55 -> 0.30
 
 HIGH_SPACE = SearchSpace(
     int_bounds=types.MappingProxyType(dict(INT_BOUNDS)),

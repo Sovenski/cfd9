@@ -27,8 +27,11 @@ def test_boundary_pinned_flags_bound_hits():
     hi = boundary_pinned([("min_agreement_high", 0.10), ("scale_div_thresh_high", 0.35)], "high")
     assert ("min_agreement_high", "lo") in hi
     assert all(f != "scale_div_thresh_high" for f, _ in hi)  # 0.35 is interior
-    lo = boundary_pinned([("scale_div_thresh_low", 0.60), ("min_agreement_low", 0.70)], "low")
+    # LOW scale_div hi widened to 0.95 (2026-06-11): the hi-pin example tracks
+    # the current bound; min_agreement lo widened to 0.02.
+    lo = boundary_pinned([("scale_div_thresh_low", 0.95), ("min_agreement_low", 0.02)], "low")
     assert ("scale_div_thresh_low", "hi") in lo
+    assert ("min_agreement_low", "lo") in lo
 
 
 def test_bootstrap_stability_passes_stable_fails_fragile():
