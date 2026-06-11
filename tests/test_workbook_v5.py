@@ -51,7 +51,7 @@ _PRE_CHANGE_CELL_SHA256 = [
     "d4de24c91407fa5f670fa35206227e933be1e782158e630cc7aae3d14389b0b6",  # 2 clone
     "79f036c65d62bbb6feb18f85f06d9dc4f47fccf954a329b74df22664b98ff17b",  # 3 settings
     "4ec943aa666a08fb9070aec11f2fdaaea233f70b9bff5608b8d8dfc8c7eadb83",  # 4 validate
-    "948c2cb741607e35954577f20ced7989bc74373db6ce2a450ec28246b82754c9",  # 5 run (§B3 + v5.1 cap + ablation)
+    "94005c314297b2bd75f1b9acfbe33c41cfbc3798cd971ece714b2b32ca8f91ab",  # 5 run (ablation screen: gen15, seed137)
 ]
 
 

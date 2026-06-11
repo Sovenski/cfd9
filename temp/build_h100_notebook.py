@@ -112,10 +112,10 @@ SIDES = "high,low"          #@param {type:"string"}
 #@markdown **Sizing (measured on L4):** ~14s/generation at POPSIZE 128 — the GPU is
 #@markdown not the bottleneck; the CPU finalist re-score tail is. L4 is sufficient.
 POPSIZE = 128               #@param {type:"integer"}
-GENERATIONS = 30            #@param {type:"integer"}
+GENERATIONS = 15            #@param {type:"integer"}
 SOBOL_N = 256               #@param {type:"integer"}
 TOP_K = 16                  #@param {type:"integer"}
-RNG_SEED = 69               #@param {type:"integer"}
+RNG_SEED = 137              #@param {type:"integer"}
 #@markdown **Anti-spray (search only):** penalizes candidates that fire far more
 #@markdown signal mass than they hit (weighted recall/precision > cap). Reported
 #@markdown LCBs stay RAW — this only steers the search away from overfiring.
