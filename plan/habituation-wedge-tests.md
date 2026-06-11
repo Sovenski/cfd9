@@ -140,3 +140,20 @@ the positive deltas are largely vote-count arithmetic, not information.
   only (post-2015, n=468): +19bps p=0.128 / +15bps p=0.349, 11/16. The
   full-period significance is fit-period inflated. Dip-selection edge remains
   directionally positive, OOS-unproven.
+
+### v18-lean SPX export audit (2026-06-11, SP_SPX 1D_e830d)
+
+- **Parity:** LOW exact PASS (280/280, 0 flips). HIGH exact on all bars ≥245
+  (0 flips / ~25,000); 3 root flips + 2 cooldown cascades in warm-up only.
+  **Root cause identified:** `pir_of` (Python) uses full-window rolling (NaN
+  in warm-up) vs Pine partial-window scan — exposed for the first time by
+  vola_range_len=120 on a HIGH preset with pre-bar-245 fires. KNOWN ISSUE for
+  any v18 productization (fix = Pine-faithful pir_of + golden re-pin cycle);
+  zero impact on analysis windows (start ≥300).
+- **Lean performance (SPX only, indicative):** LOW precision 0.333 vs
+  full-stack 0.344 — the 6 removed votes were confirmed decorative on LOW.
+  HIGH 0.124 vs 0.159 — WORSE: dropping required from 5 votes to 1 (clamp)
+  loosened selection; the 5-vote conjunction was throttling HIGH even though
+  individual votes were stamps. Note: the lean OR-rule is NOT the census's
+  drift-conditioned slice; requiring drift∧vola needs an engine change (req
+  clamp excludes drift from max_votes).
