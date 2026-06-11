@@ -369,6 +369,7 @@ def params_from_trial(trial: optuna.Trial, side: str) -> Params:
     pivot_drift_thresh = _gf("pivot_drift_thresh")
     pivot_drift_gate_mult = _gf("pivot_drift_gate_mult")
     momentum_velocity_thresh = _gf("momentum_velocity_thresh")
+    momentum_diverge_thresh = _gf("momentum_diverge_thresh")  # v18 P2.3
     gjr_vote_thresh = _gf("gjr_vote_thresh")
     har_vote_thresh = _gf("har_vote_thresh")
 
@@ -396,6 +397,11 @@ def params_from_trial(trial: optuna.Trial, side: str) -> Params:
         f"{s}_use_edge_voting", [True, False]
     )
     edge_window = trial.suggest_int(f"{s}_edge_window", 3, 60)
+
+    # v18 P2.4 — drift joins the requirable vote pool when True.
+    count_drift_vote = trial.suggest_categorical(
+        f"{s}_count_drift_vote", [True, False]
+    )
 
     kwargs_high = dict(
         S_detect_high=S_detect,
@@ -435,6 +441,8 @@ def params_from_trial(trial: optuna.Trial, side: str) -> Params:
         momentum_velocity_mode_high=momentum_velocity_mode,
         use_edge_voting_high=use_edge_voting,
         edge_window_high=edge_window,
+        momentum_diverge_thresh_high=momentum_diverge_thresh,
+        count_drift_vote_high=count_drift_vote,
     )
     kwargs_low = dict(
         S_detect_low=S_detect,
@@ -474,6 +482,8 @@ def params_from_trial(trial: optuna.Trial, side: str) -> Params:
         momentum_velocity_mode_low=momentum_velocity_mode,
         use_edge_voting_low=use_edge_voting,
         edge_window_low=edge_window,
+        momentum_diverge_thresh_low=momentum_diverge_thresh,
+        count_drift_vote_low=count_drift_vote,
     )
 
     base_dict = _params_fields(Params())

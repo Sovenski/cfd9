@@ -121,6 +121,14 @@ class Params:
     # --- Fixed constants (not per-side, not optimized) ---
     baseline_lb: int = 20
 
+    # --- v18 repair knobs (P2.3 / P2.4) — appended at the END so every
+    # positional/ordering-sensitive use of earlier fields stays stable.
+    # Neutral defaults (0.0 / False) reproduce legacy behavior BIT-EXACTLY.
+    momentum_diverge_thresh_high: float = 0.0
+    momentum_diverge_thresh_low: float = 0.0
+    count_drift_vote_high: bool = False
+    count_drift_vote_low: bool = False
+
 
 # ---------------------------------------------------------------------------
 # Pine Script primitive functions
@@ -170,8 +178,14 @@ def stdev(series: pd.Series, n: int) -> pd.Series:
 def pir_of(val: pd.Series, lb: int) -> pd.Series:
     """Percent-in-range: normalize *val* to [0, 1] over a rolling window.
 
-    PINE-FAITHFUL (2026-06-11 e830d audit): partial windows during warm-up,
-    matching Pine's scan over available bars.
+    PINE-FAITHFUL (2026-06-11 e830d audit, v18 Stage B1): Pine's ``pir_of``
+    is built on ``ta.lowest``/``ta.highest`` which (a) return na until ``lb``
+    bars of CHART HISTORY exist (bar < lb-1), and (b) SKIP na values inside
+    the window (e.g. an ATR warm-up head). The ``hi != lo ?`` ternary takes
+    the FALSE branch on na, so na lo/hi yields **0.5**, never na. Proven
+    bar-exact against the e830d export's ``dbg_high_vote_volatility``
+    column (25,250 bars, 0 flips; the partial-window variant flipped 65,
+    the na-poisoned full-window variant 11).
     """
     lo = val.rolling(lb, min_periods=1).min()
     hi = val.rolling(lb, min_periods=1).max()
@@ -179,6 +193,10 @@ def pir_of(val: pd.Series, lb: int) -> pd.Series:
     result = (val - lo) / span
     # When hi == lo the span is effectively zero — return 0.5
     result = result.where(hi != lo, 0.5)
+    # Pine: na lo/hi (all-na window) -> 0.5; insufficient history -> 0.5.
+    result = result.where(lo.notna() & hi.notna(), 0.5)
+    if lb > 1 and len(result) > 0:
+        result.iloc[: lb - 1] = 0.5
     return result
 
 
@@ -425,7 +443,10 @@ def calc_gjr_asym(df: pd.DataFrame) -> tuple[pd.Series, pd.Series]:
         )
 
     gjr_asym_ratio = gjr_var / sym_var
-    gjr_asym_norm = np.clip((gjr_asym_ratio - 1.0) / 0.1, -1.0, 1.0)
+    # v18 P2.2 — UNCLIPPED: the old clip(+-1) saturated the score so every
+    # gjr_vote_thresh in (0, 1] was equivalent (dead search dim). Pine v18
+    # edits its gjr block identically (Stage C).
+    gjr_asym_norm = (gjr_asym_ratio - 1.0) / 0.1
 
     idx = df.index
     return pd.Series(gjr_asym_norm, index=idx), pd.Series(gjr_asym_ratio, index=idx)
@@ -492,14 +513,20 @@ def precompute_matrices(
         scale_min: Minimum SMA scale (inclusive).
         scale_max: Maximum SMA scale (inclusive).
 
-    PINE-FAITHFUL (2026-06-10 TV-export audit): the Pine indicator's parity
-    shim (``pir_for_scale``) computes SMA as a ``ta.cum`` cumulative-sum
+    PINE-FAITHFUL (2026-06-10 TV-export audit; warm-up re-audited 2026-06-11
+    on e830d, v18 Stage B1): the Pine indicator's parity shim
+    (``pir_for_scale``) computes SMA as a ``ta.cum`` cumulative-sum
     difference — first valid at bar ``s`` (it needs ``csum[t-s]``), one bar
-    LATER than a pandas rolling mean — and scans pir min/max over the
-    AVAILABLE (non-na) ratio bars, i.e. partial windows during warmup, with
-    ``hi != lo ? (v-lo)/(hi-lo) : 0.5``. Both matrices are float64 because
-    Pine compares float64 pir against the thresholds; a float32 matrix flips
-    edge comparisons (pir ~ 0 vs extreme ``pct_extreme``).
+    LATER than a pandas rolling mean. The ratio is the Pine ternary
+    ``sma_b > 0 ? c_b / sma_b : 1.0`` whose condition is na (-> FALSE branch)
+    on warm-up bars, so warm-up ratio is **1.0, never na** — and the min/max
+    scan always covers exactly ``lb`` bars including virtual pre-history bars
+    (also 1.0), with ``hi != lo ? (v-lo)/(hi-lo) : 0.5``. A fully-warm-up
+    scale therefore yields pir = 0.5 on every bar (which VOTES when
+    ``pct_extreme < 0.5`` — the e830d bars 133/227/234/238/244 HIGH flips).
+    Both matrices are float64 because Pine compares float64 pir against the
+    thresholds; a float32 matrix flips edge comparisons (pir ~ 0 vs extreme
+    ``pct_extreme``).
 
     Returns:
         (sma_matrix, pir_matrix, scales_list)
@@ -532,21 +559,22 @@ def precompute_matrices(
             sma_vals[s:] = (csum[s:] - csum[:-s]) / s
         sma_matrix[i] = sma_vals
 
-        # Ratio: Pine's `sma_now > 0 ? close / sma_now : 1.0` (na stays na).
+        # Ratio: Pine's `sma_now > 0 ? close / sma_now : 1.0`. The condition
+        # is na on warm-up bars and Pine's ternary takes the FALSE branch on
+        # na, so warm-up ratio is 1.0 — NOT na (v18 B1, e830d audit).
         with np.errstate(divide="ignore", invalid="ignore"):
             ratio = np.where(sma_vals > 0, close_vals / sma_vals, 1.0)
-        ratio[np.isnan(sma_vals)] = np.nan
 
-        # PIR over the last `lb` bars, PARTIAL windows allowed (Pine skips na
-        # bars in its scan), hi == lo -> 0.5; na ratio -> na (counts as
-        # neither extreme, same as Pine's 0.5 fallback).
+        # PIR over the last `lb` bars. Pine scans exactly lb bars, with 1.0
+        # substituted on warm-up AND virtual pre-history bars; because
+        # ratio[0] == 1.0 (s >= 2 implies bar 0 is warm-up), a pandas partial
+        # window (min_periods=1) is identical to Pine's virtual-1.0 padding.
         pir_lb = max(s, 20)
         r = pd.Series(ratio)
         lo = r.rolling(pir_lb, min_periods=1).min().values
         hi = r.rolling(pir_lb, min_periods=1).max().values
         with np.errstate(divide="ignore", invalid="ignore"):
             pir_vals = np.where(hi != lo, (ratio - lo) / (hi - lo), 0.5)
-        pir_vals[np.isnan(ratio)] = np.nan
         pir_matrix[i] = pir_vals
 
     logger.info("Precomputation complete.")
@@ -629,8 +657,8 @@ if __name__ == "__main__":
     assert sma_mat.shape == (49, len(close)), f"sma shape {sma_mat.shape}"
     assert pir_mat.shape == (49, len(close)), f"pir shape {pir_mat.shape}"
     assert len(scales) == 49
-    assert sma_mat.dtype == np.float32
-    assert pir_mat.dtype == np.float32
+    assert sma_mat.dtype == np.float64
+    assert pir_mat.dtype == np.float64
     logger.info("precompute_matrices OK: shape %s, dtype %s", sma_mat.shape, sma_mat.dtype)
 
     # 4. calc_agreement_fast

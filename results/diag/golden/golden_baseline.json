@@ -41,7 +41,7 @@
         "fold0_oos_signal_high": "fa807c957eafe34b850cb453a096df2e5899f0902a837fccd59f9aafa869fb44",
         "fold0_oos_signal_low": "469d158cf2249ab4c224e0343c1faf502b47794cb688719fc4eab25485acc516",
         "fold5_oos_signal_high": "fa807c957eafe34b850cb453a096df2e5899f0902a837fccd59f9aafa869fb44",
-        "fold5_oos_signal_low": "04e207d92c500324bd6e8ac96da322c713ff210a67d35d78af0f2ef8fb72e356"
+        "fold5_oos_signal_low": "7fa2bc964f75c67c67c4ea7d9432b8c27db685f41552038ee718f22c4bd6712d"
       },
       "asset": "SPX",
       "csv": "data/raw/SPX_1D_18710201_20260318.csv",

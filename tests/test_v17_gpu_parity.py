@@ -229,7 +229,11 @@ def test_warmup_nan_region_first_300_bars(built, param_set, oracle_sigs):
     assert np.isnan(tp.feat.linreg_norm_low[:50]).any()
     assert np.isnan(tp.feat.vol_surge_low[:50]).any()
     assert np.isnan(tp.feat.mom_vel_high[:50]).any()
-    assert np.isnan(tp.feat.vola_pos_low[:300]).any()
+    assert np.isnan(tp.feat.mom_div_low[:50]).any()
+    # v18 B1: pir_of is NaN-free (Pine na -> 0.5), so vola_pos carries 0.5
+    # warm-up values instead of NaN.
+    assert not np.isnan(tp.feat.vola_pos_low[:300]).any()
+    assert (tp.feat.vola_pos_low[: tp.base.vola_range_len_low - 1] == 0.5).all()
     for pi, p in enumerate(param_set):
         got = signals_torch(tp, p, drift)
         ref_h, ref_l = oracle_sigs[("short", pi)]

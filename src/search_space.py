@@ -47,6 +47,9 @@ FLOAT_BOUNDS: dict[str, tuple[float, float]] = {
     "pivot_drift_thresh": (0.001, 0.050),
     "pivot_drift_gate_mult": (1.0, 10.0),
     "momentum_velocity_thresh": (0.0, 0.05),
+    # v18 P2.3 (Stage B): NEW momentum-divergence vote threshold; sign-test
+    # pass-rate 18% at 0.0 -> ~2-4% at 0.02; 0.0 == legacy `mom_div < 0`.
+    "momentum_diverge_thresh": (0.0, 0.02),
     # v18 Phase 1: paired with the P2.2 gjr unclip; unclipped dist spans
     # 40% -> 2% over the new box (old [0.05, 0.5] sat inside the clip rail).
     "gjr_vote_thresh": (0.5, 3.0),
@@ -64,6 +67,9 @@ BOOL_FIELDS: list[str] = [
     "use_gjr_asym",
     "use_har_vol",
     "use_edge_voting",
+    # v18 P2.4 (Stage B): when True the always-on pivot-drift vote joins the
+    # requirable pool (max_votes += 1); False == legacy bit-exact.
+    "count_drift_vote",
 ]
 
 CATEGORY_FIELDS: dict[str, list[str]] = {

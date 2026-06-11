@@ -63,8 +63,8 @@ _FEATURE_ATTRS = [
     ("_linreg_norm_low", "linreg_norm_low", "f8"),     # P8
     ("_vol_surge_high", "vol_surge_high", "f8"),
     ("_vol_surge_low", "vol_surge_low", "f8"),
-    ("_eff_md_h", "eff_md_high", "b1"),                # P6 fixed-lag array
-    ("_eff_md_l", "eff_md_low", "b1"),
+    ("_mom_div_high", "mom_div_high", "f8"),           # v18 P2.3 raw product
+    ("_mom_div_low", "mom_div_low", "f8"),
     ("_mom_vel_high", "mom_vel_high", "f8"),
     ("_mom_vel_low", "mom_vel_low", "f8"),
     ("_vola_pos_high", "vola_pos_high", "f8"),
@@ -169,6 +169,9 @@ def _reference_votes(fd: FastDetector, p: Params) -> dict[str, np.ndarray]:
     gjr_l = fd._gjr_norm >= p.gjr_vote_thresh_low
     har_h = fd._har_norm >= p.har_vote_thresh_high
     har_l = fd._har_norm >= p.har_vote_thresh_low
+    # v18 P2.3: momentum vote per candidate (0.0 == legacy `< 0`)
+    md_h_ok = fd._mom_div_high < -p.momentum_diverge_thresh_high
+    md_l_ok = fd._mom_div_low < -p.momentum_diverge_thresh_low
 
     return {
         "agr_h_high": agr_h_high, "agr_l_low": agr_l_low,
@@ -182,14 +185,14 @@ def _reference_votes(fd: FastDetector, p: Params) -> dict[str, np.ndarray]:
         "eff_va_h": _edge_or_state(_to_bool(vola_h), ew_h, uev_h),
         "eff_g_h": _edge_or_state(_to_bool(gjr_h), ew_h, uev_h),
         "eff_h_h": _edge_or_state(_to_bool(har_h), ew_h, uev_h),
-        "eff_md_h": fd._eff_md_h,
+        "eff_md_h": _edge_or_state(_to_bool(md_h_ok), ew_h, uev_h),
         "eff_t_dn_l": _edge_or_state(trend_dn_l, ew_l, uev_l),
         "eff_vs_l": _edge_or_state(_to_bool(vol_surge_l), ew_l, uev_l),
         "eff_mv_l": _edge_or_state(_to_bool(mv_l_ok), ew_l, uev_l),
         "eff_va_l": _edge_or_state(_to_bool(vola_l), ew_l, uev_l),
         "eff_g_l": _edge_or_state(_to_bool(gjr_l), ew_l, uev_l),
         "eff_h_l": _edge_or_state(_to_bool(har_l), ew_l, uev_l),
-        "eff_md_l": fd._eff_md_l,
+        "eff_md_l": _edge_or_state(_to_bool(md_l_ok), ew_l, uev_l),
     }
 
 
@@ -411,13 +414,16 @@ def test_warmup_nan_votes_resolve_false(built) -> None:
         (fd._vol_surge_low, "eff_vs_l"),
         (fd._mom_vel_high, "eff_mv_h"),
         (fd._mom_vel_low, "eff_mv_l"),
-        (fd._vola_pos_high, "eff_va_h"),
-        (fd._vola_pos_low, "eff_va_l"),
+        (fd._mom_div_high, "eff_md_h"),   # v18 P2.3 per-candidate vote
+        (fd._mom_div_low, "eff_md_l"),
     ]
     for feat, key in pairs:
         nan_mask = np.isnan(feat[:w])
         assert nan_mask.any(), key  # the warm-up region really contains NaNs
         assert not v[key][:w][nan_mask].any(), key
+    # v18 B1: vola_pos (pir_of) is NaN-free — Pine na -> 0.5 warm-up values.
+    for feat in (fd._vola_pos_high, fd._vola_pos_low):
+        assert not np.isnan(feat).any()
     ref = _reference_votes(fd, base)
     for k in _VOTE_KEYS:
         assert np.array_equal(v[k][:w], ref[k][:w]), k

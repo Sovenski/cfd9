@@ -124,21 +124,26 @@ def _rolling_mean_unfold(x: torch.Tensor, window: int) -> torch.Tensor:
 
 
 def _pir_torch(val: torch.Tensor, lb: int) -> torch.Tensor:
-    """Torch mirror of ``indicators.pir_of`` (rolling min/max + span clamp).
+    """Torch mirror of ``indicators.pir_of`` (v18 B1 Pine-true semantics).
 
-    NaN propagation through amin/amax reproduces pandas' min_periods=window
-    warm-up exactly; ``hi != lo`` is True for NaN, so NaN windows stay NaN.
+    Bars ``t < lb-1`` -> 0.5 (ta.lowest/highest na on insufficient chart
+    history); na values INSIDE a window are skipped (nan-ignoring min/max);
+    an all-na window -> 0.5 (Pine's na ternary takes the 0.5 branch).
     """
     n = val.shape[0]
-    out = torch.full((n,), float("nan"), dtype=val.dtype, device=val.device)
+    out = torch.full((n,), 0.5, dtype=val.dtype, device=val.device)
     if 0 < lb <= n:
         windows = val.unfold(0, lb, 1)
-        lo = windows.amin(dim=1)
-        hi = windows.amax(dim=1)
+        posinf = torch.tensor(float("inf"), dtype=val.dtype, device=val.device)
+        lo = torch.where(torch.isnan(windows), posinf, windows).amin(dim=1)
+        hi = torch.where(torch.isnan(windows), -posinf, windows).amax(dim=1)
         v = val[lb - 1:]
         span = (hi - lo).clamp(min=1e-10)
         res = (v - lo) / span
-        out[lb - 1:] = torch.where(hi != lo, res, torch.full_like(res, 0.5))
+        res = torch.where(hi != lo, res, torch.full_like(res, 0.5))
+        res = torch.where(torch.isinf(lo) | torch.isinf(hi),
+                          torch.full_like(res, 0.5), res)
+        out[lb - 1:] = res
     return out
 
 
@@ -150,14 +155,17 @@ def build_pir_matrix_torch(
 ) -> np.ndarray:
     """Float64 PIR matrix mirroring the PINE-FAITHFUL ``precompute_matrices``.
 
-    2026-06-10 TV-export audit: Pine's parity shim computes SMA as a
-    ``ta.cum`` cumulative-sum difference (first valid at bar ``s``) and scans
-    pir min/max over the AVAILABLE bars (partial warm-up windows), with
-    ``hi != lo ? (v-lo)/(hi-lo) : 0.5`` in float64. This builder mirrors that
-    construction in torch; the production path uses the numpy oracle matrix
-    from ``DetectorArtifacts`` directly, so this exists for on-device
-    validation (the Colab script measures its real-hardware flip rate, where
-    a parallel-scan cumsum may differ from numpy's sequential one).
+    2026-06-10 TV-export audit (warm-up re-audited 2026-06-11, v18 B1):
+    Pine's parity shim computes SMA as a ``ta.cum`` cumulative-sum difference
+    (first valid at bar ``s``); the ratio ternary ``sma > 0 ? c/sma : 1.0``
+    takes the FALSE branch on na, so warm-up ratio is **1.0, never na**, and
+    the pir min/max scan covers exactly ``lb`` bars including virtual
+    pre-history bars (also 1.0), with ``hi != lo ? (v-lo)/(hi-lo) : 0.5`` in
+    float64. This builder mirrors that construction in torch; the production
+    path uses the numpy oracle matrix from ``DetectorArtifacts`` directly, so
+    this exists for on-device validation (the Colab script measures its
+    real-hardware flip rate, where a parallel-scan cumsum may differ from
+    numpy's sequential one).
 
     Args:
         close: close prices for ONE slice (per-slice artifact — P2).
@@ -176,26 +184,23 @@ def build_pir_matrix_torch(
     out = np.full((len(scales), n_bars), np.nan, dtype=np.float64)
     x = torch.tensor(close64, dtype=torch.float64, device=device)
     csum = torch.cumsum(x, dim=0)
-    posinf = torch.tensor(float("inf"), dtype=torch.float64, device=device)
-    neginf = torch.tensor(float("-inf"), dtype=torch.float64, device=device)
     for i, s in enumerate(scales):
         # SMA via cumsum difference, valid t >= s (Pine sma_at semantics).
         sma_t = torch.full((n_bars,), float("nan"), dtype=torch.float64, device=device)
         if s < n_bars:
             sma_t[s:] = (csum[s:] - csum[:-s]) / s
+        # Pine ternary `sma > 0 ? c/sma : 1.0`: na condition -> FALSE branch,
+        # so warm-up ratio is 1.0, never NaN (v18 B1).
         ratio = torch.where(sma_t > 0, x / sma_t, torch.ones_like(x))
-        ratio = torch.where(torch.isnan(sma_t), sma_t, ratio)  # keep NaN warm-up
         lb = max(s, 20)
-        # Partial windows: NaN bars act as neutral (+inf for min, -inf for max),
-        # exactly Pine's na-skip scan over the last lb bars.
+        # Pine scans exactly lb bars; virtual pre-history bars are ratio 1.0.
         pad = lb - 1
-        v_min = torch.cat([posinf.repeat(pad), torch.where(torch.isnan(ratio), posinf, ratio)])
-        v_max = torch.cat([neginf.repeat(pad), torch.where(torch.isnan(ratio), neginf, ratio)])
-        lo = v_min.unfold(0, lb, 1).min(dim=1).values
-        hi = v_max.unfold(0, lb, 1).max(dim=1).values
+        one = torch.ones(pad, dtype=torch.float64, device=device)
+        v = torch.cat([one, ratio])
+        lo = v.unfold(0, lb, 1).min(dim=1).values
+        hi = v.unfold(0, lb, 1).max(dim=1).values
         res = torch.where(hi != lo, (ratio - lo) / (hi - lo),
                           torch.full_like(ratio, 0.5))
-        res = torch.where(torch.isnan(ratio), ratio, res)
         out[i] = res.cpu().numpy()
     logger.debug("torch PIR matrix built: %d scales x %d bars", len(scales), n_bars)
     return out
@@ -208,11 +213,12 @@ def build_pir_matrix_torch(
 _TENSOR_F64 = [
     "pir_detect_high", "pir_detect_low", "slope_val_high", "slope_val_low",
     "linreg_norm_high", "linreg_norm_low", "vol_surge_high", "vol_surge_low",
+    "mom_div_high", "mom_div_low",                        # v18 P2.3 (raw)
     "mom_vel_high", "mom_vel_low", "vola_pos_high", "vola_pos_low",
     "gjr_norm", "har_norm",
 ]
 _TENSOR_BOOL = [
-    "eff_md_high", "eff_md_low", "er_gate_ok_high", "er_gate_ok_low",
+    "er_gate_ok_high", "er_gate_ok_low",
     "price_high_ok", "price_low_ok", "ph_arr", "pl_arr",
 ]
 
@@ -341,6 +347,9 @@ class TorchPhase1:
             mv_l_ok = t["mom_vel_low"] >= abs(p.momentum_velocity_thresh_low)
         else:
             mv_l_ok = t["mom_vel_low"] <= -abs(p.momentum_velocity_thresh_low)
+        # v18 P2.3: momentum vote per candidate (0.0 == legacy `< 0`)
+        md_h_ok = t["mom_div_high"] < -p.momentum_diverge_thresh_high
+        md_l_ok = t["mom_div_low"] < -p.momentum_diverge_thresh_low
         vola_h = t["vola_pos_high"] > p.vola_high_pct_high
         vola_l = t["vola_pos_low"] > p.vola_high_pct_low
         gjr_h = t["gjr_norm"] <= -p.gjr_vote_thresh_high
@@ -358,14 +367,14 @@ class TorchPhase1:
             "eff_va_h": edge_or_state_torch(vola_h, ew_h, uev_h),
             "eff_g_h": edge_or_state_torch(gjr_h, ew_h, uev_h),
             "eff_h_h": edge_or_state_torch(har_h, ew_h, uev_h),
-            "eff_md_h": t["eff_md_high"],
+            "eff_md_h": edge_or_state_torch(md_h_ok, ew_h, uev_h),
             "eff_t_dn_l": edge_or_state_torch(trend_dn_l, ew_l, uev_l),
             "eff_vs_l": edge_or_state_torch(vol_surge_l, ew_l, uev_l),
             "eff_mv_l": edge_or_state_torch(mv_l_ok, ew_l, uev_l),
             "eff_va_l": edge_or_state_torch(vola_l, ew_l, uev_l),
             "eff_g_l": edge_or_state_torch(gjr_l, ew_l, uev_l),
             "eff_h_l": edge_or_state_torch(har_l, ew_l, uev_l),
-            "eff_md_l": t["eff_md_low"],
+            "eff_md_l": edge_or_state_torch(md_l_ok, ew_l, uev_l),
             "er_high": t["er_gate_ok_high"], "er_low": t["er_gate_ok_low"],
             "price_high": t["price_high_ok"], "price_low": t["price_low_ok"],
         }

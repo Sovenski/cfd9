@@ -386,7 +386,10 @@ class SpeculatorDetector:
         _vol_slow_high = (
             vol_surge_high_arr < (1.0 / p.vol_surge_thresh_high)
         ).astype(bool)
-        _mom_div_neg_h = (mom_diverge_high_arr < 0).astype(bool)
+        # v18 P2.3: vote is `mom_diverge < -thresh`; thresh 0.0 == legacy `< 0`.
+        _mom_div_neg_h = (
+            mom_diverge_high_arr < -p.momentum_diverge_thresh_high
+        ).astype(bool)
 
         eff_t_up_h = _edge_or_state(
             trend_up_high_arr, p.edge_window_high, p.use_edge_voting_high,
@@ -414,7 +417,10 @@ class SpeculatorDetector:
         _vol_surge_low_ = (
             vol_surge_low_arr > p.vol_surge_thresh_low
         ).astype(bool)
-        _mom_div_neg_l = (mom_diverge_low_arr < 0).astype(bool)
+        # v18 P2.3: vote is `mom_diverge < -thresh`; thresh 0.0 == legacy `< 0`.
+        _mom_div_neg_l = (
+            mom_diverge_low_arr < -p.momentum_diverge_thresh_low
+        ).astype(bool)
 
         eff_t_dn_l = _edge_or_state(
             trend_down_low_arr, p.edge_window_low, p.use_edge_voting_low,
@@ -442,16 +448,21 @@ class SpeculatorDetector:
         # Phase 2: Stateful bar-by-bar loop
         # ---------------------------------------------------------------
 
-        # Precompute max_votes (constant per Params)
+        # Precompute max_votes (constant per Params). v18 P2.4: when
+        # count_drift_vote_* is True the always-on pivot-drift vote joins
+        # the requirable pool (max_votes += 1), making a drift+vote
+        # conjunction expressible via confirm_count. False == legacy.
         max_votes_high = int(sum([
             p.use_trend_high, p.use_volume_high, p.use_momentum_high,
             p.use_momentum_velocity_high, p.use_volatility_high,
             p.use_gjr_asym_high, p.use_har_vol_high,
+            p.count_drift_vote_high,
         ]))
         max_votes_low = int(sum([
             p.use_trend_low, p.use_volume_low, p.use_momentum_low,
             p.use_momentum_velocity_low, p.use_volatility_low,
             p.use_gjr_asym_low, p.use_har_vol_low,
+            p.count_drift_vote_low,
         ]))
 
         # State

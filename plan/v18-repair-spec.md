@@ -61,3 +61,17 @@ tests/test_search_space.py re-pinned with rationale comments.
 4. Trust kernel: FastDetector & GPU byte-identity on the tiny pool with the
    NEW params exercised (thresh>0, count_drift=True).
 5. Freeze ledger updated: v18 re-freeze list = v17 list + the v18 diffs.
+
+## ERRATUM (Stage B, 2026-06-11)
+P2.1's "partial-window (min_periods=1)" model was WRONG. Pine's actual
+semantics, proven against the e830d dbg vote column (0/25,250 flips) and a
+brute-force Pine transcription test:
+- agreement matrix: warm-up ratio is 1.0 (never na — Pine ternary takes the
+  false branch on na); fully-warm-up scales yield pir 0.5, which VOTES when
+  pct_extreme < 0.5.
+- pir_of: lb bars of CHART HISTORY required (t < lb-1 -> 0.5), na values
+  SKIPPED inside the window (partial-window model: 65 flips; na-poisoned: 11;
+  history+na-skip: 0).
+Golden re-pin: ONE array (SPX fold5_oos_signal_low, bar 221/900,
+warm-up-explainable — LOW agreement warm-up extends to bar 499); all fold
+scores/LCBs bit-identical.

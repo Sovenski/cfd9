@@ -111,17 +111,15 @@ class FastDetector:
         vsl = sma(volume, p.S_detect_low)
         self._vol_surge_low = (sma(volume, vfl) / vsl.where(vsl != 0)).values.astype(float)
 
-        # --- momentum divergence vote (mom_div<0 — no threshold => edge now) ---
+        # --- momentum divergence (raw product; v18 P2.3 makes the vote
+        # `mom_div < -momentum_diverge_thresh`, a per-candidate threshold,
+        # so the comparison + edge move into signals) ---
         pr_h = (close - close.shift(p.S_detect_high)) / close.shift(p.S_detect_high).clip(lower=1e-9)
         vr_h = (volume - volume.shift(p.S_detect_high)) / volume.shift(p.S_detect_high).clip(lower=1)
-        mom_div_h = (pr_h * vr_h)
+        self._mom_div_high = (pr_h * vr_h).values.astype(float)
         pr_l = (close - close.shift(p.S_detect_low)) / close.shift(p.S_detect_low).clip(lower=1e-9)
         vr_l = (volume - volume.shift(p.S_detect_low)) / volume.shift(p.S_detect_low).clip(lower=1)
-        mom_div_l = (pr_l * vr_l)
-        self._eff_md_h = _edge_or_state(_to_bool((mom_div_h < 0).values),
-                                        p.edge_window_high, p.use_edge_voting_high)
-        self._eff_md_l = _edge_or_state(_to_bool((mom_div_l < 0).values),
-                                        p.edge_window_low, p.use_edge_voting_low)
+        self._mom_div_low = (pr_l * vr_l).values.astype(float)
 
         # --- momentum velocity (raw; threshold+mode applied in signals) ---
         self._mom_vel_high = (pr_h - pr_h.shift(1)).values.astype(float)
@@ -153,13 +151,16 @@ class FastDetector:
         self._high_arr = high.values.astype(float)
         self._low_arr = low.values.astype(float)
 
-        # --- max votes (architecture, fixed) ---
+        # --- max votes (architecture, fixed; v18 P2.4: count_drift_vote
+        # adds the always-on drift vote to the requirable pool) ---
         self._max_votes_high = int(sum([p.use_trend_high, p.use_volume_high, p.use_momentum_high,
                                         p.use_momentum_velocity_high, p.use_volatility_high,
-                                        p.use_gjr_asym_high, p.use_har_vol_high]))
+                                        p.use_gjr_asym_high, p.use_har_vol_high,
+                                        p.count_drift_vote_high]))
         self._max_votes_low = int(sum([p.use_trend_low, p.use_volume_low, p.use_momentum_low,
                                        p.use_momentum_velocity_low, p.use_volatility_low,
-                                       p.use_gjr_asym_low, p.use_har_vol_low]))
+                                       p.use_gjr_asym_low, p.use_har_vol_low,
+                                       p.count_drift_vote_low]))
 
     @staticmethod
     def _er_gate(close: pd.Series, period: int, directional: bool, use_gate: bool) -> pd.Series:
@@ -233,6 +234,10 @@ class FastDetector:
         else:
             mv_l_ok = self._mom_vel_low <= -abs(p.momentum_velocity_thresh_low)
 
+        # v18 P2.3: momentum vote per candidate (0.0 == legacy `< 0`)
+        md_h_ok = self._mom_div_high < -p.momentum_diverge_thresh_high
+        md_l_ok = self._mom_div_low < -p.momentum_diverge_thresh_low
+
         vola_h = self._vola_pos_high > p.vola_high_pct_high
         vola_l = self._vola_pos_low > p.vola_high_pct_low
         gjr_h = self._gjr_norm <= -p.gjr_vote_thresh_high
@@ -246,14 +251,14 @@ class FastDetector:
         eff_va_h = _edge_or_state(_to_bool(vola_h), ew_h, uev_h)
         eff_g_h = _edge_or_state(_to_bool(gjr_h), ew_h, uev_h)
         eff_h_h = _edge_or_state(_to_bool(har_h), ew_h, uev_h)
-        eff_md_h = self._eff_md_h
+        eff_md_h = _edge_or_state(_to_bool(md_h_ok), ew_h, uev_h)
         eff_t_dn_l = _edge_or_state(trend_dn_l, ew_l, uev_l)
         eff_vs_l = _edge_or_state(_to_bool(vol_surge_l), ew_l, uev_l)
         eff_mv_l = _edge_or_state(_to_bool(mv_l_ok), ew_l, uev_l)
         eff_va_l = _edge_or_state(_to_bool(vola_l), ew_l, uev_l)
         eff_g_l = _edge_or_state(_to_bool(gjr_l), ew_l, uev_l)
         eff_h_l = _edge_or_state(_to_bool(har_l), ew_l, uev_l)
-        eff_md_l = self._eff_md_l
+        eff_md_l = _edge_or_state(_to_bool(md_l_ok), ew_l, uev_l)
 
         ms_agree_high_arr, ms_agree_low_arr = ms_agree_high, ms_agree_low
         scale_div_high_arr, scale_div_low_arr = scale_div_high, scale_div_low
