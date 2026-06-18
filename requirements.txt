@@ -6,3 +6,4 @@ cmaes
 matplotlib
 plotly
 tqdm
+cma

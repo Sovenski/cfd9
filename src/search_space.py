@@ -36,14 +36,23 @@ FLOAT_BOUNDS: dict[str, tuple[float, float]] = {
     "pct_extreme": (0.70, 0.99),
     "min_agreement": (0.10, 0.90),
     "dur_extreme_pct": (0.50, 0.99),
-    "vol_surge_thresh": (1.0, 3.0),
+    # v18 Phase 1 bounds repair (plan/v18-repair-spec.md): ratio q99=1.78,
+    # the old [1.0, 3.0] upper half was dead; new box spans 19% -> ~3%.
+    "vol_surge_thresh": (1.0, 1.5),
     "scale_div_thresh": (0.10, 0.60),
-    "slope_thresh": (0.01, 0.50),
+    # v18 Phase 1: value is x1000-scaled (dist -12..+9); old [0.01, 0.5] was
+    # structurally always-pass; new box spans ~46% -> ~5% pass-rate.
+    "slope_thresh": (0.1, 6.0),
     "vola_high_pct": (0.50, 0.99),
     "pivot_drift_thresh": (0.001, 0.050),
     "pivot_drift_gate_mult": (1.0, 10.0),
     "momentum_velocity_thresh": (0.0, 0.05),
-    "gjr_vote_thresh": (0.05, 0.50),
+    # v18 P2.3 (Stage B): NEW momentum-divergence vote threshold; sign-test
+    # pass-rate 18% at 0.0 -> ~2-4% at 0.02; 0.0 == legacy `mom_div < 0`.
+    "momentum_diverge_thresh": (0.0, 0.02),
+    # v18 Phase 1: paired with the P2.2 gjr unclip; unclipped dist spans
+    # 40% -> 2% over the new box (old [0.05, 0.5] sat inside the clip rail).
+    "gjr_vote_thresh": (0.5, 3.0),
     "har_vote_thresh": (0.05, 0.50),
 }
 
@@ -58,6 +67,9 @@ BOOL_FIELDS: list[str] = [
     "use_gjr_asym",
     "use_har_vol",
     "use_edge_voting",
+    # v18 P2.4 (Stage B): when True the always-on pivot-drift vote joins the
+    # requirable pool (max_votes += 1); False == legacy bit-exact.
+    "count_drift_vote",
 ]
 
 CATEGORY_FIELDS: dict[str, list[str]] = {
@@ -90,18 +102,30 @@ def _freeze_categories(cats: dict[str, list[str]]) -> dict[str, tuple[str, ...]]
     return {k: tuple(v) for k, v in cats.items()}
 
 
+# LOW: widen the four big-run boundary pins (v17gpu_20260610_225518), each in
+# its pinned direction (2026-06-11 aggressive widen). The v5.1 spray pricing
+# (W_FP 0.5, firing cap 1.0) is the counterweight that lets the optimizer
+# explore the looser corner without being rewarded for overfiring.
+# FLOAT_BOUNDS stays the historical reference; every non-pinned bound is reused.
+_LOW_FLOAT_BOUNDS = dict(FLOAT_BOUNDS)
+_LOW_FLOAT_BOUNDS["pct_extreme"] = (0.40, 0.99)          # pin lo 0.70 -> 0.40
+_LOW_FLOAT_BOUNDS["min_agreement"] = (0.02, 0.90)        # pin lo 0.10 -> 0.02
+_LOW_FLOAT_BOUNDS["scale_div_thresh"] = (0.10, 0.95)     # pin hi 0.60 -> 0.95
+_LOW_FLOAT_BOUNDS["pivot_drift_thresh"] = (0.0001, 0.050)  # pin lo 0.001 -> 0.0001
+
 LOW_SPACE = SearchSpace(
     int_bounds=types.MappingProxyType(dict(INT_BOUNDS)),
-    float_bounds=types.MappingProxyType(dict(FLOAT_BOUNDS)),
+    float_bounds=types.MappingProxyType(_LOW_FLOAT_BOUNDS),
     bool_fields=tuple(BOOL_FIELDS),
     category_fields=types.MappingProxyType(_freeze_categories(CATEGORY_FIELDS)),
     trial_key_overrides=types.MappingProxyType(dict(_TRIAL_KEY_OVERRIDES)),
 )
 
-# HIGH: identical to LOW except two relaxed floors (spec §3).
+# HIGH: relax its two pinned floors further off the historical base (the
+# big-run HIGH winner sat exactly on both). Non-pinned bounds reuse the base.
 _HIGH_FLOAT_BOUNDS = dict(FLOAT_BOUNDS)
-_HIGH_FLOAT_BOUNDS["dur_extreme_pct"] = (0.30, 0.99)
-_HIGH_FLOAT_BOUNDS["pct_extreme"] = (0.55, 0.99)
+_HIGH_FLOAT_BOUNDS["dur_extreme_pct"] = (0.10, 0.99)     # pin lo 0.30 -> 0.10
+_HIGH_FLOAT_BOUNDS["pct_extreme"] = (0.30, 0.99)         # pin lo 0.55 -> 0.30
 
 HIGH_SPACE = SearchSpace(
     int_bounds=types.MappingProxyType(dict(INT_BOUNDS)),

@@ -121,6 +121,14 @@ class Params:
     # --- Fixed constants (not per-side, not optimized) ---
     baseline_lb: int = 20
 
+    # --- v18 repair knobs (P2.3 / P2.4) — appended at the END so every
+    # positional/ordering-sensitive use of earlier fields stays stable.
+    # Neutral defaults (0.0 / False) reproduce legacy behavior BIT-EXACTLY.
+    momentum_diverge_thresh_high: float = 0.0
+    momentum_diverge_thresh_low: float = 0.0
+    count_drift_vote_high: bool = False
+    count_drift_vote_low: bool = False
+
 
 # ---------------------------------------------------------------------------
 # Pine Script primitive functions
@@ -133,7 +141,13 @@ def sma(series: pd.Series, n: int) -> pd.Series:
 
 
 def atr(df: pd.DataFrame, n: int) -> pd.Series:
-    """Average true range over *n* bars."""
+    """Pine-exact ``ta.atr(n)``: Wilder RMA of true range (NOT an SMA).
+
+    ``ta.atr = ta.rma(ta.tr(true), n)`` — the RMA seeds with the SMA of the
+    first *n* TRs, then recurses ``rma[t] = (rma[t-1]*(n-1) + tr[t]) / n``.
+    The 2026-06-10 TV-export audit caught the old SMA-of-TR implementation
+    flipping the volatility vote (8 LOW signal flips over 155yr of SPX).
+    """
     prev_close = df["close"].shift(1)
     tr = pd.concat(
         [
@@ -143,22 +157,46 @@ def atr(df: pd.DataFrame, n: int) -> pd.Series:
         ],
         axis=1,
     ).max(axis=1)
-    return tr.rolling(n).mean()
+    tr_vals = tr.values.astype(np.float64)
+    out = np.full(len(tr_vals), np.nan, dtype=np.float64)
+    if len(tr_vals) >= n:
+        out[n - 1] = np.mean(tr_vals[:n])
+        for t in range(n, len(tr_vals)):
+            out[t] = (out[t - 1] * (n - 1) + tr_vals[t]) / n
+    return pd.Series(out, index=df.index)
 
 
 def stdev(series: pd.Series, n: int) -> pd.Series:
-    """Rolling standard deviation (sample, ddof=1)."""
-    return series.rolling(n).std(ddof=1)
+    """Pine-exact ``ta.stdev(n)``: POPULATION std (biased, ddof=0).
+
+    Pine's default is ``biased=true`` (divide by n); the old ddof=1 sample
+    std diverged from Pine for the "StdDev" volatility method.
+    """
+    return series.rolling(n).std(ddof=0)
 
 
 def pir_of(val: pd.Series, lb: int) -> pd.Series:
-    """Percent-in-range: normalize *val* to [0, 1] over a rolling window."""
-    lo = val.rolling(lb).min()
-    hi = val.rolling(lb).max()
+    """Percent-in-range: normalize *val* to [0, 1] over a rolling window.
+
+    PINE-FAITHFUL (2026-06-11 e830d audit, v18 Stage B1): Pine's ``pir_of``
+    is built on ``ta.lowest``/``ta.highest`` which (a) return na until ``lb``
+    bars of CHART HISTORY exist (bar < lb-1), and (b) SKIP na values inside
+    the window (e.g. an ATR warm-up head). The ``hi != lo ?`` ternary takes
+    the FALSE branch on na, so na lo/hi yields **0.5**, never na. Proven
+    bar-exact against the e830d export's ``dbg_high_vote_volatility``
+    column (25,250 bars, 0 flips; the partial-window variant flipped 65,
+    the na-poisoned full-window variant 11).
+    """
+    lo = val.rolling(lb, min_periods=1).min()
+    hi = val.rolling(lb, min_periods=1).max()
     span = (hi - lo).clip(lower=1e-10)
     result = (val - lo) / span
     # When hi == lo the span is effectively zero — return 0.5
     result = result.where(hi != lo, 0.5)
+    # Pine: na lo/hi (all-na window) -> 0.5; insufficient history -> 0.5.
+    result = result.where(lo.notna() & hi.notna(), 0.5)
+    if lb > 1 and len(result) > 0:
+        result.iloc[: lb - 1] = 0.5
     return result
 
 
@@ -198,6 +236,40 @@ def pivot_low(series: pd.Series, n: int) -> pd.Series:
     window = 2 * n + 1
     rolled = series.rolling(window, center=True).apply(
         lambda w: 1.0 if w[n] == w.min() else 0.0, raw=True
+    )
+    return rolled.fillna(0).astype(bool)
+
+
+def pivot_high_pine(series: pd.Series, n: int) -> pd.Series:
+    """Pine-exact ``ta.pivothigh(n, n)``: ``>=`` on the LEFT, strict ``>`` on
+    the RIGHT — for tied maxima the LATER twin is the pivot.
+
+    Differs from :func:`pivot_high` (``w[n] == w.max()``, ties count BOTH
+    twins), which is kept for ground-truth LABELING only. Rule proven
+    empirically against the 2026-06-10 TV export (25,249 SPX bars, 346
+    pivots, 0 disagreements; the loose rule produced 15 phantom tie-pivots
+    and strict-both rejected 13 real ones). Detection-path baseline pivots
+    MUST use this variant — they feed the shared confirmed-pivots drift
+    stack (parity).
+    """
+    window = 2 * n + 1
+    rolled = series.rolling(window, center=True).apply(
+        lambda w: 1.0 if (w[n] >= w[:n].max() and w[n] > w[n + 1:].max()) else 0.0,
+        raw=True,
+    )
+    return rolled.fillna(0).astype(bool)
+
+
+def pivot_low_pine(series: pd.Series, n: int) -> pd.Series:
+    """Pine-exact ``ta.pivotlow(n, n)``: ``<=`` on the LEFT, strict ``<`` on
+    the RIGHT — for tied minima the LATER twin is the pivot.
+
+    See :func:`pivot_high_pine`. Detection-path baseline pivots MUST use this.
+    """
+    window = 2 * n + 1
+    rolled = series.rolling(window, center=True).apply(
+        lambda w: 1.0 if (w[n] <= w[:n].min() and w[n] < w[n + 1:].min()) else 0.0,
+        raw=True,
     )
     return rolled.fillna(0).astype(bool)
 
@@ -371,7 +443,10 @@ def calc_gjr_asym(df: pd.DataFrame) -> tuple[pd.Series, pd.Series]:
         )
 
     gjr_asym_ratio = gjr_var / sym_var
-    gjr_asym_norm = np.clip((gjr_asym_ratio - 1.0) / 0.1, -1.0, 1.0)
+    # v18 P2.2 — UNCLIPPED: the old clip(+-1) saturated the score so every
+    # gjr_vote_thresh in (0, 1] was equivalent (dead search dim). Pine v18
+    # edits its gjr block identically (Stage C).
+    gjr_asym_norm = (gjr_asym_ratio - 1.0) / 0.1
 
     idx = df.index
     return pd.Series(gjr_asym_norm, index=idx), pd.Series(gjr_asym_ratio, index=idx)
@@ -438,10 +513,25 @@ def precompute_matrices(
         scale_min: Minimum SMA scale (inclusive).
         scale_max: Maximum SMA scale (inclusive).
 
+    PINE-FAITHFUL (2026-06-10 TV-export audit; warm-up re-audited 2026-06-11
+    on e830d, v18 Stage B1): the Pine indicator's parity shim
+    (``pir_for_scale``) computes SMA as a ``ta.cum`` cumulative-sum
+    difference — first valid at bar ``s`` (it needs ``csum[t-s]``), one bar
+    LATER than a pandas rolling mean. The ratio is the Pine ternary
+    ``sma_b > 0 ? c_b / sma_b : 1.0`` whose condition is na (-> FALSE branch)
+    on warm-up bars, so warm-up ratio is **1.0, never na** — and the min/max
+    scan always covers exactly ``lb`` bars including virtual pre-history bars
+    (also 1.0), with ``hi != lo ? (v-lo)/(hi-lo) : 0.5``. A fully-warm-up
+    scale therefore yields pir = 0.5 on every bar (which VOTES when
+    ``pct_extreme < 0.5`` — the e830d bars 133/227/234/238/244 HIGH flips).
+    Both matrices are float64 because Pine compares float64 pir against the
+    thresholds; a float32 matrix flips edge comparisons (pir ~ 0 vs extreme
+    ``pct_extreme``).
+
     Returns:
         (sma_matrix, pir_matrix, scales_list)
-        sma_matrix: float32, shape (n_scales, n_bars)
-        pir_matrix: float32, shape (n_scales, n_bars)
+        sma_matrix: float64, shape (n_scales, n_bars)
+        pir_matrix: float64, shape (n_scales, n_bars)
         scales_list: list of integer scales [scale_min .. scale_max]
     """
     scales_list = list(range(scale_min, scale_max + 1))
@@ -449,26 +539,43 @@ def precompute_matrices(
     n_bars = len(close)
     close_vals = close.values.astype(np.float64)
 
-    sma_matrix = np.full((n_scales, n_bars), np.nan, dtype=np.float32)
-    pir_matrix = np.full((n_scales, n_bars), np.nan, dtype=np.float32)
+    sma_matrix = np.full((n_scales, n_bars), np.nan, dtype=np.float64)
+    pir_matrix = np.full((n_scales, n_bars), np.nan, dtype=np.float64)
 
     logger.info(
         "Precomputing SMA/PIR matrices: %d scales x %d bars ...",
         n_scales, n_bars,
     )
 
-    for i, s in enumerate(scales_list):
-        # SMA
-        sma_vals = pd.Series(close_vals).rolling(s).mean().values
-        sma_matrix[i] = sma_vals.astype(np.float32)
+    # ta.cum(close): strictly sequential float64 running sum (np.cumsum is
+    # sequential for accumulate — byte-identical to Pine's bar-by-bar cum).
+    csum = np.cumsum(close_vals)
 
-        # Ratio and PIR
+    for i, s in enumerate(scales_list):
+        # SMA via cumsum difference: (cum[t] - cum[t-s]) / s, valid t >= s
+        # (Pine's sma_at(s, 0) needs the csum value BEFORE the window).
+        sma_vals = np.full(n_bars, np.nan, dtype=np.float64)
+        if s < n_bars:
+            sma_vals[s:] = (csum[s:] - csum[:-s]) / s
+        sma_matrix[i] = sma_vals
+
+        # Ratio: Pine's `sma_now > 0 ? close / sma_now : 1.0`. The condition
+        # is na on warm-up bars and Pine's ternary takes the FALSE branch on
+        # na, so warm-up ratio is 1.0 — NOT na (v18 B1, e830d audit).
         with np.errstate(divide="ignore", invalid="ignore"):
-            ratio = close_vals / sma_vals
-        ratio_series = pd.Series(ratio)
+            ratio = np.where(sma_vals > 0, close_vals / sma_vals, 1.0)
+
+        # PIR over the last `lb` bars. Pine scans exactly lb bars, with 1.0
+        # substituted on warm-up AND virtual pre-history bars; because
+        # ratio[0] == 1.0 (s >= 2 implies bar 0 is warm-up), a pandas partial
+        # window (min_periods=1) is identical to Pine's virtual-1.0 padding.
         pir_lb = max(s, 20)
-        pir_vals = pir_of(ratio_series, pir_lb).values
-        pir_matrix[i] = pir_vals.astype(np.float32)
+        r = pd.Series(ratio)
+        lo = r.rolling(pir_lb, min_periods=1).min().values
+        hi = r.rolling(pir_lb, min_periods=1).max().values
+        with np.errstate(divide="ignore", invalid="ignore"):
+            pir_vals = np.where(hi != lo, (ratio - lo) / (hi - lo), 0.5)
+        pir_matrix[i] = pir_vals
 
     logger.info("Precomputation complete.")
     return sma_matrix, pir_matrix, scales_list
@@ -550,8 +657,8 @@ if __name__ == "__main__":
     assert sma_mat.shape == (49, len(close)), f"sma shape {sma_mat.shape}"
     assert pir_mat.shape == (49, len(close)), f"pir shape {pir_mat.shape}"
     assert len(scales) == 49
-    assert sma_mat.dtype == np.float32
-    assert pir_mat.dtype == np.float32
+    assert sma_mat.dtype == np.float64
+    assert pir_mat.dtype == np.float64
     logger.info("precompute_matrices OK: shape %s, dtype %s", sma_mat.shape, sma_mat.dtype)
 
     # 4. calc_agreement_fast

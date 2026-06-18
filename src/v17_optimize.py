@@ -45,6 +45,8 @@ _VOTE_FIELDS = {
     "gjr_vote_thresh": "use_gjr_asym",
     "har_vote_thresh": "use_har_vol",
     "momentum_velocity_thresh": "use_momentum_velocity",
+    # v18 P2.3: searchable iff the momentum vote is on; 0.0 == legacy.
+    "momentum_diverge_thresh": "use_momentum",
 }
 # Pivot-drift vote is always active in the detector (_USE_PIVOT_DRIFT=True).
 _DRIFT_FIELDS = ["pivot_drift_thresh", "pivot_drift_gate_mult"]
